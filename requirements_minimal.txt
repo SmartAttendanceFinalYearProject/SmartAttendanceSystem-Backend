@@ -1,8 +1,23 @@
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-pydantic>=2.0
-pillow>=10.0
-numpy>=1.24
-opencv-python>=4.8               # optional – useful for camera/input later
-ultralytics>=8.2.0
-torch>=2.0.0                     # or torch==2.1.0+cpu / +cu121 depending on your setup
+# Core web / API
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6          # for file uploads in /register
+
+# Data / Image processing
+pillow>=10.0.0
+numpy>=1.26.0,<2.0               # <2.0 is required for insightface 0.7.3 compatibility
+opencv-python>=4.8.0
+
+# Face detection (YOLOv8)
+ultralytics>=8.0.196
+
+# Face embedding & recognition (insightface)
+insightface==0.7.3
+onnxruntime>=1.16.0              # required by insightface
+
+# Database
+pymongo>=4.6.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0
