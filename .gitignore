@@ -15,10 +15,6 @@ dist/
 *.egg-info/
 *.egg
 
-# Wheels
-insightface-*.whl
-*.whl
-
 # Environment / local config
 .env
 .env.*

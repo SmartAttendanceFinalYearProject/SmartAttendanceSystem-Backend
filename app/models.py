@@ -22,7 +22,6 @@ class PoseStatus(str, Enum):
 class Gender(str, Enum):
     MALE = "male"
     FEMALE = "female"
-    OTHER = "other"
 
 class FaceBox(BaseModel):
     x1: int
