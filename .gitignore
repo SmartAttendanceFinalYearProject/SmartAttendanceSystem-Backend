@@ -15,7 +15,6 @@ dist/
 *.egg-info/
 *.egg
 
-
 # Environment / local config
 .env
 .env.*
