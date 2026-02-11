@@ -1,26 +1,38 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import base64
 from io import BytesIO
 from PIL import Image
 import numpy as np
 import logging
-import sys
 import torch
+from bson.objectid import ObjectId
+from datetime import datetime
 
-# Configure logging
+# ── Import project modules ────────────────────────────────
+from .models import UserCreate, UserOut, FaceBox, DetectionResponse, DetectionRequest
+from .database import users_collection
+from .face_utils import extract_face_embedding
+
+# ── YOLO imports (only when needed) ───────────────────────
+from ultralytics import YOLO
+from ultralytics.nn.tasks import DetectionModel
+
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
-app = FastAPI(title="Face Detection API", version="1.0.0")
+app = FastAPI(
+    title="Smart Attendance - Detection + Registration",
+    description="Face detection (YOLOv8) + Student enrollment with embedding storage",
+    version="0.2.0"
+)
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,298 +41,223 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request/Response models
-class DetectionRequest(BaseModel):
-    image_base64: str
-    
-class FaceBox(BaseModel):
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-    confidence: float
-
-class DetectionResponse(BaseModel):
-    total_faces: int
-    faces: List[FaceBox]
-    message: str
-    model_info: Optional[dict] = None
+# ── Global YOLO Detector ──────────────────────────────────
 
 class YOLOFaceDetector:
-    """
-    YOLO Face Detector using ultralytics
-    """
     def __init__(self, model_name: str = "yolov8n.pt"):
         self.model = None
         self.model_name = model_name
         self.model_info = {}
-        logger.info(f"Initializing YOLO Face Detector with model: {model_name}")
+        logger.info(f"Loading YOLO model: {model_name}")
         self._load_model()
-    
+
     def _load_model(self):
-        """Load YOLO model"""
         try:
-            from ultralytics import YOLO
-            from ultralytics.nn.tasks import DetectionModel
-            
-            # Allowlist the required global for safe unpickling (PyTorch 2.1+ security)
             torch.serialization.add_safe_globals([DetectionModel])
-            
-            logger.info(f"Loading YOLO model: {self.model_name}")
-            
-            # Load the model
             self.model = YOLO(self.model_name)
-            
-            # Test with dummy image to ensure it's loaded
-            dummy_image = np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8)
-            results = self.model(dummy_image, verbose=False)
-            
+
             self.model_info = {
                 "model_name": self.model_name,
                 "model_type": "yolo",
                 "classes": self.model.names if hasattr(self.model, 'names') else {},
                 "input_size": 640
             }
-            
-            logger.info(f"✅ YOLO model loaded successfully: {self.model_name}")
-            logger.info(f"Model classes: {self.model.names if hasattr(self.model, 'names') else 'Unknown'}")
-            
+            logger.info(f"YOLO model loaded: {self.model_name}")
         except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}", exc_info=True)
-            raise Exception(f"YOLO model loading failed: {e}")
-    
+            logger.error(f"YOLO load failed: {e}", exc_info=True)
+            raise
+
     def detect_faces(self, image: Image.Image) -> List[FaceBox]:
-        """
-        Detect faces in image using YOLO
-        """
         try:
             if self.model is None:
-                raise Exception("YOLO model not loaded")
-            
-            # Convert PIL Image to numpy array
-            image_np = np.array(image)
-            
-            # Ensure image is in RGB format
-            if len(image_np.shape) == 2:  # Grayscale
-                image_np = np.stack([image_np] * 3, axis=-1)
-            elif image_np.shape[2] == 4:  # RGBA
-                image_np = image_np[:, :, :3]
-            
-            logger.info(f"Image shape: {image_np.shape}, dtype: {image_np.dtype}")
-            
-            # Run YOLO inference
+                raise RuntimeError("YOLO model not loaded")
+
+            image_np = np.array(image.convert("RGB"))
+
             results = self.model(
                 image_np,
-                conf=0.25,      # Confidence threshold
-                iou=0.45,       # NMS IoU threshold
-                imgsz=640,      # Inference size
+                conf=0.25,
+                iou=0.45,
+                imgsz=640,
                 verbose=False,
-                device='cpu'    # change to 'cuda' if you have GPU
+                device="cpu"          # change to "cuda" if you have GPU
             )
-            
-            # Extract face detections
+
             faces = []
-            
+
             for result in results:
-                if result.boxes is not None and len(result.boxes) > 0:
-                    logger.info(f"Found {len(result.boxes)} detections")
-                    
-                    for box in result.boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                        confidence = float(box.conf[0].cpu().numpy())
-                        
-                        # Get class ID and name
-                        class_id = int(box.cls[0].cpu().numpy()) if len(box.cls) > 0 else -1
-                        class_name = self.model.names.get(class_id, f'class_{class_id}') if hasattr(self.model, 'names') else 'unknown'
-                        
-                        logger.info(f"  Detection: {class_name} (conf: {confidence:.3f}) at [{x1},{y1},{x2},{y2}]")
-                        
-                        # Filter for persons (class 0) or faces
-                        if class_name.lower() in ['person', 'face'] or class_id == 0:
-                            if confidence >= 0.25:
-                                faces.append(FaceBox(
-                                    x1=int(x1),
-                                    y1=int(y1),
-                                    x2=int(x2),
-                                    y2=int(y2),
-                                    confidence=round(confidence, 3)
-                                ))
-                else:
-                    logger.info("No detections in this result")
-            
-            logger.info(f"✅ Total faces detected: {len(faces)}")
+                if result.boxes is None or len(result.boxes) == 0:
+                    continue
+
+                for box in result.boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    conf = float(box.conf)
+                    cls_id = int(box.cls) if len(box.cls) > 0 else -1
+                    cls_name = self.model.names.get(cls_id, "unknown")
+
+                    if cls_name.lower() in {"person", "face"} or cls_id == 0:
+                        if conf >= 0.25:
+                            faces.append(FaceBox(
+                                x1=x1, y1=y1, x2=x2, y2=y2,
+                                confidence=round(conf, 3)
+                            ))
+
             return faces
-            
+
         except Exception as e:
-            logger.error(f"Error in face detection: {e}", exc_info=True)
+            logger.error(f"YOLO detection error: {e}", exc_info=True)
             return []
 
-# Initialize detector
+
+# Initialize YOLO detector
+detector = None
 try:
     detector = YOLOFaceDetector(model_name="yolov8n.pt")
-    logger.info("✅ Face detector initialized successfully")
+    logger.info("YOLO face detector ready")
 except Exception as e:
-    logger.error(f"❌ Failed to initialize detector: {e}", exc_info=True)
+    logger.critical(f"Failed to initialize YOLO detector: {e}", exc_info=True)
     detector = None
 
+
+# ── Helpers ───────────────────────────────────────────────
+
 def decode_base64_image(image_base64: str) -> Image.Image:
-    """Convert base64 string to PIL Image"""
     try:
-        if ',' in image_base64:
-            image_base64 = image_base64.split(',')[1]
-        
-        image_data = base64.b64decode(image_base64)
-        image = Image.open(BytesIO(image_data))
-        
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        logger.info(f"Decoded image: {image.size} ({image.mode})")
-        return image
-        
+        if "," in image_base64:
+            image_base64 = image_base64.split(",", 1)[1]
+        data = base64.b64decode(image_base64)
+        img = Image.open(BytesIO(data))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        return img
     except Exception as e:
-        logger.error(f"Image decoding error: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}")
+        raise HTTPException(400, detail=f"Invalid image data: {str(e)}")
+
+
+# ── Endpoints ─────────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    if detector:
-        status = "ready"
-        model_info = detector.model_info
-    else:
-        status = "not_ready"
-        model_info = {"error": "Detector not initialized"}
-    
+    status = "ready" if detector else "not_ready"
     return {
-        "message": "YOLO Face Detection API",
+        "message": "Smart Attendance API",
         "status": status,
         "endpoints": {
-            "detect_faces": "POST /detect",
-            "health": "GET /health",
-            "test": "GET /test"
-        },
-        "model_info": model_info
+            "detect": "POST /detect (face detection)",
+            "register": "POST /register (student enrollment)",
+            "health": "GET /health"
+        }
     }
+
 
 @app.get("/health")
 async def health_check():
-    if detector and detector.model:
-        status = "healthy"
-        model_status = "loaded"
-    else:
-        status = "unhealthy"
-        model_status = "not_loaded"
-    
+    yolo_ok = bool(detector and detector.model)
+    try:
+        users_collection.find_one(limit=1)  # test mongo connection
+        db_ok = True
+    except:
+        db_ok = False
+
     return {
-        "status": status,
-        "service": "face_detection",
-        "yolo_model": model_status,
-        "python_version": sys.version.split()[0]
+        "status": "healthy" if yolo_ok and db_ok else "partial",
+        "yolo": "loaded" if yolo_ok else "failed",
+        "mongodb": "connected" if db_ok else "disconnected",
+        "face_embedding_model": "insightface-buffalo_l"
     }
 
-@app.get("/test")
-async def test_detection():
-    try:
-        from PIL import Image, ImageDraw
-        import io
-        
-        img = Image.new('RGB', (800, 600), color='white')
-        draw = ImageDraw.Draw(img)
-        
-        positions = [(100, 100), (300, 150), (500, 80)]
-        sizes = [80, 90, 70]
-        
-        for i, (x, y) in enumerate(positions):
-            size = sizes[i]
-            draw.ellipse(
-                [x, y, x + size, y + size],
-                fill='lightblue',
-                outline='darkblue',
-                width=3
-            )
-        
-        buffered = io.BytesIO()
-        img.save(buffered, format="JPEG", quality=95)
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        image = Image.open(io.BytesIO(base64.b64decode(img_str)))
-        
-        if detector:
-            faces = detector.detect_faces(image)
-            message = f"Test completed: {len(faces)} faces detected"
-        else:
-            faces = []
-            message = "Detector not available"
-        
-        return {
-            "total_faces": len(faces),
-            "faces": [face.dict() for face in faces],
-            "message": message,
-            "test_image": "3 circles drawn"
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Test failed: {str(e)}")
 
 @app.post("/detect", response_model=DetectionResponse)
 async def detect_faces(request: DetectionRequest):
+    if detector is None:
+        raise HTTPException(500, "Face detector not initialized")
+
     try:
-        logger.info("=" * 50)
-        logger.info("Received face detection request")
-        
-        if detector is None or detector.model is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Face detector not initialized. Please check server logs."
-            )
-        
         image = decode_base64_image(request.image_base64)
-        logger.info(f"Processing image: {image.size} pixels")
-        
         faces = detector.detect_faces(image)
-        
-        if len(faces) == 0:
-            message = "No faces detected"
-        elif len(faces) == 1:
-            message = "1 face detected"
-        else:
-            message = f"{len(faces)} faces detected"
-        
-        logger.info(f"✅ Detection complete: {message}")
-        logger.info("=" * 50)
-        
+
+        count = len(faces)
+        msg = "No faces detected" if count == 0 else \
+              "1 face detected" if count == 1 else \
+              f"{count} faces detected"
+
         return DetectionResponse(
-            total_faces=len(faces),
+            total_faces=count,
             faces=faces,
-            message=message,
+            message=msg,
             model_info=detector.model_info
         )
-        
-    except HTTPException:
-        raise
+
     except Exception as e:
-        logger.error(f"Detection failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Face detection failed: {str(e)}")
+        logger.error(f"Detection failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Detection failed: {str(e)}")
+
+
+@app.post("/register", response_model=UserOut)
+async def register_student(
+    name: str = Form(..., min_length=2),
+    student_id: Optional[str] = Form(None),
+    group: Optional[str] = Form(None),
+    image: UploadFile = File(...)
+):
+    """
+    Enroll a new student:
+    - name (required)
+    - student_id (optional)
+    - group/class (optional)
+    - image file (must contain one clear face)
+    """
+    try:
+        # Read uploaded image
+        contents = await image.read()
+        pil_image = Image.open(BytesIO(contents)).convert("RGB")
+
+        # Extract embedding with insightface
+        embedding = extract_face_embedding(pil_image)
+        if embedding is None:
+            raise HTTPException(400, "No valid face detected in the uploaded image. Try a clearer photo.")
+
+        # Prepare document for MongoDB
+        user_doc = {
+            "name": name.strip(),
+            "student_id": student_id.strip() if student_id else None,
+            "group": group.strip() if group else None,
+            "embedding": embedding.tolist(),  # numpy array → list[float]
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        # Save to MongoDB
+        result = users_collection.insert_one(user_doc)
+        user_id = str(result.inserted_id)
+
+        logger.info(f"Student registered: {name} (ID: {user_id})")
+
+        return UserOut(
+            id=user_id,
+            name=name,
+            student_id=user_doc["student_id"],
+            group=user_doc["group"]
+        )
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Registration failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Registration failed: {str(e)}")
+
+
+# ── Run ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    
-    logger.info("=" * 50)
-    logger.info("Starting YOLO Face Detection API")
-    logger.info(f"Python: {sys.version}")
-    logger.info(f"PyTorch: {torch.__version__}")
-    logger.info(f"Ultralytics: {getattr(detector.model if detector and detector.model else None, '__class__', 'N/A')}")
-    logger.info("=" * 50)
-    
-    if detector is None:
-        logger.error("❌ Detector failed to initialize. Check logs above.")
-    else:
-        logger.info("✅ Detector ready for requests")
-    
+    logger.info("Starting Smart Attendance API...")
+    logger.info(f"PyTorch version: {torch.__version__}")
+
     uvicorn.run(
-        app,
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=False,
+        reload=True,           # good for development
         log_level="info"
     )

@@ -1,14 +1,23 @@
-# FastAPI basics
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
+# Core web / API
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6          # for file uploads in /register
 
-# Image processing
-pillow==10.1.0
-numpy==1.24.3
+# Data / Image processing
+pillow>=10.0.0
+numpy>=1.26.0,<2.0               # <2.0 is required for insightface 0.7.3 compatibility
+opencv-python>=4.8.0
 
-# YOLO only (no torch installation needed - ultralytics handles it)
-ultralytics==8.0.196
+# Face detection (YOLOv8)
+ultralytics>=8.0.196
 
-# For base64 decoding
-pybase64==1.3.1
+# Face embedding & recognition (insightface)
+insightface==0.7.3
+onnxruntime>=1.16.0              # required by insightface
+
+# Database
+pymongo>=4.6.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0

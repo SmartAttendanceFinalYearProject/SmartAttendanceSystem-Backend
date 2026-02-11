@@ -1,6 +1,28 @@
-\venv
+# Virtual envs
+venv/
+.venv/
+
+# Python caches and bytecode
 __pycache__/
+*.py[cod]
 *.pyc
 *.pyo
 *.pyd
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+*.egg
+
+
+# Environment / local config
 .env
+.env.*
+.vscode/
+.idea/
+
+
+
+# Test / tooling
+.pytest_cache/
