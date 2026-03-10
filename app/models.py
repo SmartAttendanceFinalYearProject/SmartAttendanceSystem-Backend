@@ -1,6 +1,8 @@
 from enum import Enum
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from datetime import datetime 
+from pydantic import BaseModel, Field, EmailStr  
 
 class AttendanceStatus(str, Enum):
     PRESENT = "present"
@@ -38,13 +40,22 @@ class DetectionResponse(BaseModel):
     faces: List[FaceBox]
     message: str
 
-class UserCreate(BaseModel):
-    name: str = Field(..., min_length=2)
-    student_id: Optional[str] = None
-    group: Optional[str] = None
+class StudentCreate(BaseModel):
+    fullName: str = Field(..., min_length=2, max_length=100)
+    studentID: str = Field(..., min_length=3, max_length=50)
+    department: Optional[str] = Field(None, max_length=100)
+    section: Optional[str] = Field(None, max_length=50)
+    email: Optional[EmailStr] = None
+    # faceEmbedding is handled separately
 
-class UserOut(BaseModel):
+class StudentOut(BaseModel):
     id: str
-    name: str
-    student_id: Optional[str]
-    group: Optional[str]
+    fullName: str
+    studentID: str
+    department: Optional[str] = None
+    section: Optional[str] = None
+    email: Optional[str] = None
+    registrationDate: datetime
+
+    class Config:
+        from_attributes = True

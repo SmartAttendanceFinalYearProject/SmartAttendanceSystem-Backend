@@ -12,8 +12,8 @@ from bson.objectid import ObjectId
 from datetime import datetime
 
 # ── Import project modules ────────────────────────────────
-from .models import UserCreate, UserOut, FaceBox, DetectionResponse, DetectionRequest
-from .database import users_collection
+from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
+from .database import students_collection
 from .face_utils import extract_face_embedding
 
 # ── YOLO imports (only when needed) ───────────────────────
@@ -154,7 +154,7 @@ async def root():
 async def health_check():
     yolo_ok = bool(detector and detector.model)
     try:
-        users_collection.find_one(limit=1)  # test mongo connection
+        students_collection.find_one(limit=1)  # test mongo connection
         db_ok = True
     except:
         db_ok = False
@@ -193,21 +193,32 @@ async def detect_faces(request: DetectionRequest):
         raise HTTPException(500, f"Detection failed: {str(e)}")
 
 
-@app.post("/register", response_model=UserOut)
+@app.post("/register", response_model=StudentOut)
 async def register_student(
-    name: str = Form(..., min_length=2),
-    student_id: Optional[str] = Form(None),
-    group: Optional[str] = Form(None),
+    fullName: str = Form(..., min_length=2),  # Changed from name
+    studentID: str = Form(...),  # Changed from student_id, now required
+    department: Optional[str] = Form(None),  # New field
+    section: Optional[str] = Form(None),  # New field
+    email: Optional[str] = Form(None),  # New field
     image: UploadFile = File(...)
 ):
     """
     Enroll a new student:
-    - name (required)
-    - student_id (optional)
-    - group/class (optional)
+    - fullName (required)
+    - studentID (required)
+    - department (optional)
+    - section (optional)
+    - email (optional)
     - image file (must contain one clear face)
     """
     try:
+        # Validate email format if provided
+        if email:
+            import re
+            email_regex = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
+            if not re.match(email_regex, email):
+                raise HTTPException(400, "Invalid email format")
+
         # Read uploaded image
         contents = await image.read()
         pil_image = Image.open(BytesIO(contents)).convert("RGB")
@@ -217,27 +228,36 @@ async def register_student(
         if embedding is None:
             raise HTTPException(400, "No valid face detected in the uploaded image. Try a clearer photo.")
 
-        # Prepare document for MongoDB
+        # Prepare document for MongoDB with new attributes
         user_doc = {
-            "name": name.strip(),
-            "student_id": student_id.strip() if student_id else None,
-            "group": group.strip() if group else None,
-            "embedding": embedding.tolist(),  # numpy array → list[float]
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "fullName": fullName.strip(),
+            "studentID": studentID.strip(),
+            "department": department.strip() if department else None,
+            "section": section.strip() if section else None,
+            "email": email.strip() if email else None,
+            "faceEmbedding": embedding.tolist(),  # numpy array → list[float]
+            "registrationDate": datetime.utcnow()  # Changed from created_at/updated_at
         }
 
+        # Check if studentID already exists
+        existing_student = students_collection.find_one({"studentID": studentID.strip()})
+        if existing_student:
+            raise HTTPException(400, f"Student with ID {studentID} already exists")
+
         # Save to MongoDB
-        result = users_collection.insert_one(user_doc)
+        result = students_collection.insert_one(user_doc)
         user_id = str(result.inserted_id)
 
-        logger.info(f"Student registered: {name} (ID: {user_id})")
+        logger.info(f"Student registered: {fullName} (ID: {studentID})")
 
-        return UserOut(
+        return StudentOut(
             id=user_id,
-            name=name,
-            student_id=user_doc["student_id"],
-            group=user_doc["group"]
+            fullName=fullName,
+            studentID=studentID,
+            department=user_doc["department"],
+            section=user_doc["section"],
+            email=user_doc["email"],
+            registrationDate=user_doc["registrationDate"]
         )
 
     except HTTPException as he:
@@ -245,7 +265,6 @@ async def register_student(
     except Exception as e:
         logger.error(f"Registration failed: {e}", exc_info=True)
         raise HTTPException(500, f"Registration failed: {str(e)}")
-
 
 # ── Run ───────────────────────────────────────────────────
 

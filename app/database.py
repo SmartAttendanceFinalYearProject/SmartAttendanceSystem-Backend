@@ -14,4 +14,4 @@ client = MongoClient(MONGODB_URL)
 db = client[MONGODB_DB_NAME]
 
 # Collection for registered users + embeddings
-users_collection = db["users"]
+students_collection = db["student"]
