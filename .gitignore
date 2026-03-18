@@ -25,3 +25,17 @@ dist/
 
 # Test / tooling
 .pytest_cache/
+
+# Ignore dataset and large files
+dataset/
+*.jpg
+*.jpeg
+*.png
+*.pth          # if you save models later
+*.h5
+*.pt
+__pycache__/
+*.pyc
+*.log
+temp/
+*.zip          # backups
