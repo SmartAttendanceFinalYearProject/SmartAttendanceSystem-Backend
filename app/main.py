@@ -5,16 +5,18 @@ from typing import List, Optional
 import base64
 from io import BytesIO
 from PIL import Image
+import io   
 import numpy as np
 import logging
 import torch
 from bson.objectid import ObjectId
 from datetime import datetime
+from .recognizer import recognize_faces_in_classroom
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
 from .database import students_collection
-from .face_utils import extract_face_embedding
+from .face_utils import extract_face_embedding, detect_faces_for_attendance
 
 # ── YOLO imports (only when needed) ───────────────────────
 from ultralytics import YOLO
@@ -265,6 +267,37 @@ async def register_student(
     except Exception as e:
         logger.error(f"Registration failed: {e}", exc_info=True)
         raise HTTPException(500, f"Registration failed: {str(e)}")
+
+@app.post("/attendance/recognize")
+async def recognize_classroom_attendance(file: UploadFile = File(...)):
+    """
+    Upload a classroom group photo → returns all detected students with names
+    """
+    try:
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
+        
+        # Step 1: Detect all faces + get embeddings
+        faces = detect_faces_for_attendance(image)
+        
+        if not faces:
+            return {"message": "No faces detected", "students": []}
+        
+        # Step 2: Recognize each student using our trained model
+        recognized = recognize_faces_in_classroom(faces)
+        
+        # Optional: Count present students
+        present_students = [r["student_id"] for r in recognized if r["recognized"]]
+        
+        return {
+            "total_faces_detected": len(faces),
+            "recognized_students": recognized,
+            "present_count": len(present_students),
+            "present_list": present_students
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 
 # ── Run ───────────────────────────────────────────────────
 
