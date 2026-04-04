@@ -4,6 +4,7 @@ from typing import Optional, List
 import cv2
 from PIL import Image
 import logging
+from .recognizer import recognize_faces_in_classroom
 
 logger = logging.getLogger(__name__)
 
