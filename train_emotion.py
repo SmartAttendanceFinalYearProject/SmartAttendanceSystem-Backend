@@ -14,10 +14,12 @@ import insightface
 # ========================= CONFIG =========================
 DATA_PATH = Path("dataset/raw_data/student_photos")
 MODEL_SAVE_PATH = "models/emotion_model.pth"
+CHECKPOINT_PATH = "models/emotion_checkpoint.pth"
+
 EMOTION_CLASSES = ["neutral", "happy", "angry"]
 
-BATCH_SIZE = 32
-NUM_EPOCHS = 40
+BATCH_SIZE = 16          # Reduced for faster epochs on CPU
+NUM_EPOCHS = 20          # Reduced from 40
 LEARNING_RATE = 0.001
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,7 +44,7 @@ class EmotionDataset(Dataset):
             if not student_dir.is_dir() or not student_dir.name.startswith("student_"):
                 continue
 
-            # Neutral images from recognition folder
+            # Neutral from recognition folder
             recog_dir = student_dir / "recognition"
             if recog_dir.exists():
                 for img_path in recog_dir.glob("*.jpg"):
@@ -72,21 +74,16 @@ class EmotionDataset(Dataset):
         img_path = self.image_paths[idx]
         label = self.labels[idx]
 
-        # Read image
         image = cv2.imread(str(img_path))
         if image is None:
-            # Fallback: return black image
             image = np.zeros((112, 112, 3), dtype=np.uint8)
         else:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Try to align face
         faces = face_app.get(image)
         if len(faces) > 0 and hasattr(faces[0], 'aligned') and faces[0].aligned is not None:
-            aligned_face = faces[0].aligned
-            pil_image = Image.fromarray(aligned_face)
+            pil_image = Image.fromarray(faces[0].aligned)
         else:
-            # Fallback if alignment fails
             pil_image = Image.fromarray(image)
 
         if self.transform:
@@ -119,15 +116,26 @@ class EmotionModel(nn.Module):
 # ========================= TRAINING =========================
 if __name__ == "__main__":
     dataset = EmotionDataset(transform=transform)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=False)
 
     model = EmotionModel(num_classes=len(EMOTION_CLASSES)).to(device)
-    criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    start_epoch = 0
 
-    print("Starting Emotion Model Training...\n")
+    # Resume from checkpoint if exists
+    if os.path.exists(CHECKPOINT_PATH):
+        print(f"✅ Resuming from checkpoint...")
+        checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0)
+        print(f"Resuming from epoch {start_epoch}")
 
-    for epoch in range(NUM_EPOCHS):
+    criterion = nn.CrossEntropyLoss()
+
+    print(f"Starting Training from epoch {start_epoch + 1} to {NUM_EPOCHS}...\n")
+
+    for epoch in range(start_epoch, NUM_EPOCHS):
         model.train()
         running_loss = 0.0
         correct = 0
@@ -151,7 +159,14 @@ if __name__ == "__main__":
         avg_loss = running_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{NUM_EPOCHS}] Loss: {avg_loss:.4f} | Accuracy: {accuracy:.2f}%")
 
-    # Save model
+        # Save checkpoint after every epoch
+        torch.save({
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, CHECKPOINT_PATH)
+
+    # Save final model
     os.makedirs("models", exist_ok=True)
     torch.save({
         'model_state_dict': model.state_dict(),
