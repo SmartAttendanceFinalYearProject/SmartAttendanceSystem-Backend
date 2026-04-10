@@ -12,6 +12,7 @@ import torch
 from bson.objectid import ObjectId
 from datetime import datetime
 from .recognizer import recognize_faces_in_classroom
+from .emotion import predict_emotion
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
@@ -271,34 +272,56 @@ async def register_student(
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(file: UploadFile = File(...)):
     """
-    Upload a classroom group photo → returns all detected students with names
+    Upload classroom group photo → Returns students + emotions
     """
     try:
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents))
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # Step 1: Detect all faces + get embeddings
+        # Detect faces
         faces = detect_faces_for_attendance(image)
         
         if not faces:
-            return {"message": "No faces detected", "students": []}
+            return {"status": "success", "message": "No faces detected", "recognized_students": []}
         
-        # Step 2: Recognize each student using our trained model
-        recognized = recognize_faces_in_classroom(faces)
-        
-        # Optional: Count present students
-        present_students = [r["student_id"] for r in recognized if r["recognized"]]
-        
-        return {
-            "total_faces_detected": len(faces),
-            "recognized_students": recognized,
-            "present_count": len(present_students),
-            "present_list": present_students
-        }
-        
-    except Exception as e:
-        return {"error": str(e)}
+        # Recognize students + predict emotion
+        results = []
+        for face in faces:
+            emb = np.array(face["embedding"], dtype=np.float32)
+            
+            # Student recognition from database
+            student_recog = recognize_student(emb)   # from recognizer.py
+            
+            # Emotion prediction
+            # Crop face from original image using bbox
+            x1, y1, x2, y2 = face["bbox"]
+            face_crop = image.crop((x1, y1, x2, y2))
+            emotion_result = predict_emotion(face_crop)
+            
+            results.append({
+                "bbox": face["bbox"],
+                "student_id": student_recog["student_id"],
+                "full_name": student_recog["full_name"],
+                "recognition_confidence": student_recog["confidence"],
+                "recognized": student_recog["recognized"],
+                "emotion": emotion_result["emotion"],
+                "emotion_confidence": emotion_result["emotion_confidence"],
+                "pose": face.get("pose")
+            })
 
+        present = [r["full_name"] for r in results if r["recognized"]]
+
+        return {
+            "status": "success",
+            "total_faces_detected": len(faces),
+            "recognized_count": len(present),
+            "recognized_students": results,
+            "present_list": present
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+        
 # ── Run ───────────────────────────────────────────────────
 
 if __name__ == "__main__":

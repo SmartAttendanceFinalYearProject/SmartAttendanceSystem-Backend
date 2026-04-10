@@ -31,7 +31,7 @@ dataset/
 *.jpg
 *.jpeg
 *.png
-*.pth          # if you save models later
+*.pth
 *.h5
 *.pt
 __pycache__/
