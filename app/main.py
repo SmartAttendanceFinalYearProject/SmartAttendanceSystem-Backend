@@ -13,6 +13,7 @@ from bson.objectid import ObjectId
 from datetime import datetime
 from .recognizer import recognize_faces_in_classroom
 from .emotion import predict_emotion
+from .pose import predict_pose
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
@@ -272,40 +273,50 @@ async def register_student(
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(file: UploadFile = File(...)):
     """
-    Full Smart Attendance: Student Recognition + Emotion + Pose
+    Full Smart Attendance: Student + Emotion + Pose
     """
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # Detect all faces
+        # Step 1: Detect all faces with InsightFace
         faces = detect_faces_for_attendance(image)
         
         if not faces:
             return {"status": "success", "message": "No faces detected", "results": []}
         
+        # Step 2: Get student recognition + emotion + pose for each face
         results = []
         for face in faces:
             emb = np.array(face["embedding"], dtype=np.float32)
             
-            # 1. Student Recognition from Database
-            student_recog = recognize_student(emb)
+            # Student Recognition (using your recognizer.py)
+            student_recog = recognize_faces_in_classroom([face])[0]   # Send single face
             
-            # 2. Crop face for emotion & pose
+            # Crop face for emotion and pose prediction
+            # Better face crop with padding
             x1, y1, x2, y2 = face["bbox"]
+            h, w = image.size[1], image.size[0]   # height, width
+
+            pad = int((x2 - x1) * 0.2)   # 20% padding
+            x1 = max(0, x1 - pad)
+            y1 = max(0, y1 - pad)
+            x2 = min(w, x2 + pad)
+            y2 = min(h, y2 + pad)
+
             face_crop = image.crop((x1, y1, x2, y2))
             
-            # 3. Predict Emotion
+            # Predict Emotion
             emotion_result = predict_emotion(face_crop)
             
-            # 4. Predict Pose
+            # Predict Pose
             pose_result = predict_pose(face_crop)
             
             results.append({
                 "bbox": face["bbox"],
                 "student_id": student_recog["student_id"],
                 "full_name": student_recog["full_name"],
-                "recognition_confidence": student_recog["confidence"],
+                "recognition_confidence": student_recog["recognition_confidence"],
                 "recognized": student_recog["recognized"],
                 "emotion": emotion_result["emotion"],
                 "emotion_confidence": emotion_result["emotion_confidence"],
@@ -324,9 +335,8 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        logger.error(f"Attendance error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-# ── Run ───────────────────────────────────────────────────
+        logger.error(f"Attendance recognize error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}# ── Run ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
