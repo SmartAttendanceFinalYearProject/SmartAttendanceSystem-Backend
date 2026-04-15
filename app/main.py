@@ -272,41 +272,45 @@ async def register_student(
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(file: UploadFile = File(...)):
     """
-    Upload classroom group photo → Returns students + emotions
+    Full Smart Attendance: Student Recognition + Emotion + Pose
     """
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # Step 1: Detect all faces
+        # Detect all faces
         faces = detect_faces_for_attendance(image)
         
         if not faces:
-            return {"status": "success", "message": "No faces detected", "recognized_students": []}
+            return {"status": "success", "message": "No faces detected", "results": []}
         
-        # Step 2: Recognize students using database (using your recognizer)
-        recognized_list = recognize_faces_in_classroom(faces)
-        
-        # Step 3: Add emotion prediction for each face
         results = []
-        for i, face_data in enumerate(recognized_list):
-            face = faces[i]  # original face data
+        for face in faces:
+            emb = np.array(face["embedding"], dtype=np.float32)
             
-            # Crop face for emotion detection
+            # 1. Student Recognition from Database
+            student_recog = recognize_student(emb)
+            
+            # 2. Crop face for emotion & pose
             x1, y1, x2, y2 = face["bbox"]
             face_crop = image.crop((x1, y1, x2, y2))
             
+            # 3. Predict Emotion
             emotion_result = predict_emotion(face_crop)
             
+            # 4. Predict Pose
+            pose_result = predict_pose(face_crop)
+            
             results.append({
-                "bbox": face_data["bbox"],
-                "student_id": face_data["student_id"],
-                "full_name": face_data["full_name"],
-                "recognition_confidence": face_data["recognition_confidence"],
-                "recognized": face_data["recognized"],
+                "bbox": face["bbox"],
+                "student_id": student_recog["student_id"],
+                "full_name": student_recog["full_name"],
+                "recognition_confidence": student_recog["confidence"],
+                "recognized": student_recog["recognized"],
                 "emotion": emotion_result["emotion"],
                 "emotion_confidence": emotion_result["emotion_confidence"],
-                "pose": face_data.get("pose")
+                "pose": pose_result["pose"],
+                "pose_confidence": pose_result["pose_confidence"]
             })
 
         present = [r["full_name"] for r in results if r["recognized"]]
@@ -315,13 +319,13 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
             "status": "success",
             "total_faces_detected": len(faces),
             "recognized_count": len(present),
-            "recognized_students": results,
+            "results": results,
             "present_list": present
         }
 
     except Exception as e:
-        logger.error(f"Attendance recognize error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}    
+        logger.error(f"Attendance error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 # ── Run ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
