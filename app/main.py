@@ -273,44 +273,30 @@ async def register_student(
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(file: UploadFile = File(...)):
     """
-    Full Smart Attendance: Student + Emotion + Pose
+    Full Attendance: Recognition + Emotion + Pose (Sitting/Standing)
     """
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # Step 1: Detect all faces with InsightFace
         faces = detect_faces_for_attendance(image)
         
         if not faces:
             return {"status": "success", "message": "No faces detected", "results": []}
-        
-        # Step 2: Get student recognition + emotion + pose for each face
+
         results = []
         for face in faces:
             emb = np.array(face["embedding"], dtype=np.float32)
             
-            # Student Recognition (using your recognizer.py)
-            student_recog = recognize_faces_in_classroom([face])[0]   # Send single face
+            # Student Recognition
+            student_recog = recognize_faces_in_classroom([face])[0]
             
-            # Crop face for emotion and pose prediction
-            # Better face crop with padding
+            # Crop face for emotion
             x1, y1, x2, y2 = face["bbox"]
-            h, w = image.size[1], image.size[0]   # height, width
-
-            pad = int((x2 - x1) * 0.2)   # 20% padding
-            x1 = max(0, x1 - pad)
-            y1 = max(0, y1 - pad)
-            x2 = min(w, x2 + pad)
-            y2 = min(h, y2 + pad)
-
             face_crop = image.crop((x1, y1, x2, y2))
             
-            # Predict Emotion
             emotion_result = predict_emotion(face_crop)
-            
-            # Predict Pose
-            pose_result = predict_pose(face_crop)
+            pose_result = predict_pose(face_crop, face["bbox"], image.width, image.height)
             
             results.append({
                 "bbox": face["bbox"],
@@ -335,9 +321,10 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        logger.error(f"Attendance recognize error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}# ── Run ───────────────────────────────────────────────────
+        logger.error(f"Attendance error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
+        
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Smart Attendance API...")

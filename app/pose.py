@@ -26,12 +26,11 @@ class PoseModel(nn.Module):
         return self.backbone(x)
 
 
-# Load the model
 def load_pose_model():
     checkpoint = torch.load(MODEL_PATH, map_location=device)
     classes = checkpoint.get('classes', ['standing', 'sitting'])
     
-    model = PoseModel(num_classes=len(classes)).to(device)
+    model = PoseModel(num_classes=2).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
@@ -49,15 +48,15 @@ transform = transforms.Compose([
 ])
 
 
-def predict_pose(image: Image.Image) -> dict:
-    """Predict sitting or standing using upper body crop"""
+def predict_pose(image: Image.Image, bbox: list = None, img_width: int = None, img_height: int = None) -> dict:
+    """Predict sitting or standing"""
     try:
-        # Convert to OpenCV
+        # Convert to cv2
         img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
-        # Use larger upper body crop for better sitting/standing detection
+        # Upper body crop (important for sitting vs standing)
         h, w = img_cv.shape[:2]
-        body_crop = img_cv[0:int(h * 0.72), :, :]   # Upper 72% of image
+        body_crop = img_cv[0:int(h * 0.72), :, :]
         
         pil_image = Image.fromarray(cv2.cvtColor(body_crop, cv2.COLOR_BGR2RGB))
 
@@ -65,11 +64,17 @@ def predict_pose(image: Image.Image) -> dict:
 
         with torch.no_grad():
             outputs = pose_model(input_tensor)
-            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
-            confidence, predicted_idx = torch.max(probabilities, 0)
+            probs = torch.nn.functional.softmax(outputs[0], dim=0)
+            confidence, idx = torch.max(probs, 0)
 
-        pose = POSE_CLASSES[predicted_idx.item()]
+        pose = POSE_CLASSES[idx.item()]
         confidence_score = float(confidence.item()) * 100
+
+        # Optional: Use position rule as backup in group photos
+        if bbox and img_height and confidence_score < 70:
+            y_center = (bbox[1] + bbox[3]) / 2
+            if y_center > img_height * 0.6:
+                pose = "sitting"
 
         return {
             "pose": pose,
@@ -78,4 +83,4 @@ def predict_pose(image: Image.Image) -> dict:
 
     except Exception as e:
         print(f"Pose prediction error: {e}")
-        return {"pose": "standing", "pose_confidence": 0.0}
+        return {"pose": "standing", "pose_confidence": 50.0}
