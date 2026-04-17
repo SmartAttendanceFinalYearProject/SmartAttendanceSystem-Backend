@@ -1,173 +1,81 @@
-import os
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms, models
+from torchvision import transforms
 from PIL import Image
 import cv2
 import numpy as np
 from pathlib import Path
-from tqdm import tqdm
 import insightface
 
 # ========================= CONFIG =========================
-DATA_PATH = Path("dataset/raw_data/student_photos")
-MODEL_SAVE_PATH = "models/pose_model.pth"
-CHECKPOINT_PATH = "models/pose_checkpoint.pth"
-
-BATCH_SIZE = 16
-NUM_EPOCHS = 25
-LEARNING_RATE = 0.001
-
+MODEL_PATH = Path("models/pose_model.pth")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
-# ========================= DATASET - BODY CROP =========================
-class PoseDataset(Dataset):
-    def __init__(self, transform=None):
-        self.transform = transform
-        self.image_paths = []
-        self.labels = []
-        
-        self.class_to_idx = {
-            "standing": 0,
-            "sitting": 1,
-            "looking_up": 2,
-            "looking_down": 3,
-            "front_neutral": 4
-        }
-        self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
-
-        print("Loading pose dataset with body crops...")
-
-        for student_dir in sorted(DATA_PATH.iterdir()):
-            if not student_dir.is_dir() or not student_dir.name.startswith("student_"):
-                continue
-
-            pose_dir = student_dir / "pose"
-            if pose_dir.exists():
-                for img_path in pose_dir.glob("*.jpg"):
-                    filename = img_path.name.lower()
-                    
-                    if "sitting" in filename:
-                        label = self.class_to_idx["sitting"]
-                    elif "standing" in filename:
-                        label = self.class_to_idx["standing"]
-                    elif "looking_up" in filename:
-                        label = self.class_to_idx["looking_up"]
-                    elif "looking_down" in filename:
-                        label = self.class_to_idx["looking_down"]
-                    else:
-                        label = self.class_to_idx["front_neutral"]
-                    
-                    self.image_paths.append(img_path)
-                    self.labels.append(label)
-
-        print(f"Loaded {len(self.image_paths)} pose images | Classes: {list(self.class_to_idx.keys())}")
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        label = self.labels[idx]
-
-        image = cv2.imread(str(img_path))
-        if image is None:
-            image = np.zeros((224, 224, 3), dtype=np.uint8)
-        else:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        # Use larger crop (upper body) instead of face only
-        h, w = image.shape[:2]
-        # Take upper 70% of the image as body region
-        crop = image[0:int(h*0.75), :, :]
-        pil_image = Image.fromarray(crop)
-
-        if self.transform:
-            pil_image = self.transform(pil_image)
-
-        return pil_image, label
-
-
-# Better transform for body
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),           # Larger size for body
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomRotation(20),
-    transforms.ColorJitter(brightness=0.3, contrast=0.3),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet norm
-])
+# Load InsightFace
+face_app = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+face_app.prepare(ctx_id=0, det_size=(640, 640))
 
 # ========================= MODEL =========================
 class PoseModel(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=2):
         super().__init__()
-        self.backbone = models.resnet18(weights='IMAGENET1K_V1')
+        self.backbone = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', weights=None)
         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
 
     def forward(self, x):
         return self.backbone(x)
 
 
-# ========================= TRAINING =========================
-if __name__ == "__main__":
-    dataset = PoseDataset(transform=transform)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=False)
+# Load the model
+def load_pose_model():
+    checkpoint = torch.load(MODEL_PATH, map_location=device)
+    classes = checkpoint.get('classes', ['standing', 'sitting'])
+    
+    model = PoseModel(num_classes=len(classes)).to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    
+    print(f"✅ Pose model loaded | Classes: {classes}")
+    return model, classes
 
-    model = PoseModel(num_classes=len(dataset.class_to_idx)).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-    start_epoch = 0
 
-    if os.path.exists(CHECKPOINT_PATH):
-        print("✅ Resuming from checkpoint...")
-        checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint.get('epoch', 0)
+pose_model, POSE_CLASSES = load_pose_model()
 
-    criterion = nn.CrossEntropyLoss()
+# Transform
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
 
-    print(f"Starting Pose Training from epoch {start_epoch + 1}...\n")
 
-    for epoch in range(start_epoch, NUM_EPOCHS):
-        model.train()
-        running_loss = 0.0
-        correct = 0
-        total = 0
+def predict_pose(image: Image.Image) -> dict:
+    """Predict sitting or standing using upper body crop"""
+    try:
+        # Convert to OpenCV
+        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Use larger upper body crop for better sitting/standing detection
+        h, w = img_cv.shape[:2]
+        body_crop = img_cv[0:int(h * 0.72), :, :]   # Upper 72% of image
+        
+        pil_image = Image.fromarray(cv2.cvtColor(body_crop, cv2.COLOR_BGR2RGB))
 
-        for images, labels in tqdm(dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}"):
-            images, labels = images.to(device), labels.to(device)
+        input_tensor = transform(pil_image).unsqueeze(0).to(device)
 
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+        with torch.no_grad():
+            outputs = pose_model(input_tensor)
+            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+            confidence, predicted_idx = torch.max(probabilities, 0)
 
-            running_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
+        pose = POSE_CLASSES[predicted_idx.item()]
+        confidence_score = float(confidence.item()) * 100
 
-        accuracy = 100. * correct / total
-        avg_loss = running_loss / len(dataloader)
-        print(f"Epoch [{epoch+1}/{NUM_EPOCHS}] Loss: {avg_loss:.4f} | Accuracy: {accuracy:.2f}%")
+        return {
+            "pose": pose,
+            "pose_confidence": round(confidence_score, 2)
+        }
 
-        torch.save({
-            'epoch': epoch + 1,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'classes': list(dataset.class_to_idx.keys())
-        }, CHECKPOINT_PATH)
-
-    # Save final model
-    os.makedirs("models", exist_ok=True)
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'classes': list(dataset.class_to_idx.keys())
-    }, MODEL_SAVE_PATH)
-
-    print(f"\n✅ Pose Training Completed! Model saved to: {MODEL_SAVE_PATH}")
+    except Exception as e:
+        print(f"Pose prediction error: {e}")
+        return {"pose": "standing", "pose_confidence": 0.0}
