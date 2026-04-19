@@ -13,5 +13,14 @@ if not MONGODB_URL:
 client = MongoClient(MONGODB_URL)
 db = client[MONGODB_DB_NAME]
 
-# Collection for registered users + embeddings
-students_collection = db["student"]
+# ====================== COLLECTIONS ======================
+students_collection = db["students"]
+subjects_collection = db["subjects"]
+teachers_collection = db["teachers"]
+classes_collection = db["classes"]
+attendance_collection = db["attendance_records"]
+
+# Create indexes for better performance
+students_collection.create_index("studentID", unique=True)
+teachers_collection.create_index("username", unique=True)
+classes_collection.create_index("class_name")
