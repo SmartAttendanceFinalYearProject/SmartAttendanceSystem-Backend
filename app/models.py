@@ -1,9 +1,10 @@
 from enum import Enum
-from pydantic import BaseModel, Field
-from typing import Optional, List
-from datetime import datetime 
-from pydantic import BaseModel, Field, EmailStr  
+from pydantic import BaseModel, Field, EmailStr
+from typing import Optional, List, Dict
+from datetime import datetime
 
+
+# ====================== ENUMS ======================
 class AttendanceStatus(str, Enum):
     PRESENT = "present"
     ABSENT = "absent"
@@ -11,20 +12,16 @@ class AttendanceStatus(str, Enum):
 class EmotionStatus(str, Enum):
     HAPPY = "happy"
     NEUTRAL = "neutral"
-    SAD = "sad"
     ANGRY = "angry"
     UNKNOWN = "unknown"
 
 class PoseStatus(str, Enum):
-    UP = "looking_up"
-    DOWN = "looking_down"
-    FRONT = "looking_front"
+    STANDING = "standing"
+    SITTING = "sitting"
     UNKNOWN = "unknown"
 
-class Gender(str, Enum):
-    MALE = "male"
-    FEMALE = "female"
 
+# ====================== COMMON ======================
 class FaceBox(BaseModel):
     x1: int
     y1: int
@@ -32,30 +29,93 @@ class FaceBox(BaseModel):
     y2: int
     confidence: float
 
-class DetectionRequest(BaseModel):
-    image_base64: str
 
-class DetectionResponse(BaseModel):
-    total_faces: int
-    faces: List[FaceBox]
-    message: str
-
+# ====================== STUDENT ======================
 class StudentCreate(BaseModel):
     fullName: str = Field(..., min_length=2, max_length=100)
     studentID: str = Field(..., min_length=3, max_length=50)
     department: Optional[str] = Field(None, max_length=100)
     section: Optional[str] = Field(None, max_length=50)
     email: Optional[EmailStr] = None
-    # faceEmbedding is handled separately
+    batch_class_year: str = Field(..., description="e.g. 2022, 2023, BCY2024")
+
 
 class StudentOut(BaseModel):
     id: str
     fullName: str
     studentID: str
-    department: Optional[str] = None
-    section: Optional[str] = None
-    email: Optional[str] = None
+    department: Optional[str]
+    section: Optional[str]
+    email: Optional[str]
+    batch_class_year: str
     registrationDate: datetime
 
-    class Config:
-        from_attributes = True
+
+# ====================== SUBJECT ======================
+class SubjectCreate(BaseModel):
+    subject_name: str
+    subject_code: str
+
+
+class SubjectOut(BaseModel):
+    id: str
+    subject_name: str
+    subject_code: str
+
+
+# ====================== TEACHER ======================
+class TeacherCreate(BaseModel):
+    teacher_name: str
+    subject_id: str
+    username: str
+    password: str
+
+
+class TeacherOut(BaseModel):
+    id: str
+    teacher_name: str
+    subject_id: str
+    username: str
+
+
+# ====================== CLASS ======================
+class ClassSchedule(BaseModel):
+    days: List[str] = Field(..., example=["Monday", "Wednesday", "Friday"])
+    start_time: str = Field(..., example="10:00 AM")
+    end_time: str = Field(..., example="11:30 AM")
+
+
+class ClassCreate(BaseModel):
+    class_name: str
+    subject_id: str
+    teacher_name: str
+    start_date: datetime
+    end_date: datetime
+    schedule: ClassSchedule
+
+
+class ClassOut(BaseModel):
+    id: str
+    class_name: str
+    subject_id: str
+    teacher_name: str
+    start_date: datetime
+    end_date: datetime
+    schedule: ClassSchedule
+    student_count: int = 0
+
+
+# ====================== ATTENDANCE ======================
+class AttendanceSessionCreate(BaseModel):
+    class_id: str
+    date: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AttendanceRecord(BaseModel):
+    student_id: str
+    student_name: str
+    status: AttendanceStatus
+    emotion: Optional[str] = None
+    pose: Optional[str] = None
+    recognition_confidence: Optional[float] = None
+    timestamp: datetime
