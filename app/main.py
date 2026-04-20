@@ -334,24 +334,22 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
 @app.post("/login", response_model=Token)
 async def login(form_data: UserLogin):
     """
-    Single login endpoint for both Admin and Teacher
+    Single login for both Admin and Teacher
     """
-    # Find user by username
     user = teachers_collection.find_one({"username": form_data.username})
     
-    if not user or not verify_password(form_data.password, user.get("password")):
+    if not user or not verify_password(form_data.password, user.get("password", "")):
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password"
         )
 
-    # Create JWT token with role
     access_token = create_access_token(
         data={"sub": user["username"], "role": user["role"]}
     )
 
     return {
-        "access_token": access_token, 
+        "access_token": access_token,
         "token_type": "bearer",
         "role": user["role"],
         "full_name": user.get("full_name")
