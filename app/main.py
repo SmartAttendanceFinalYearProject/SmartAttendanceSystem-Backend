@@ -17,7 +17,7 @@ from .pose import predict_pose
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
-from .database import students_collection
+from .database import students_collection , teachers_collection
 from .face_utils import extract_face_embedding, detect_faces_for_attendance
 
 # ── YOLO imports (only when needed) ───────────────────────
