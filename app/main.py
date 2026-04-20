@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -27,7 +27,10 @@ from ultralytics.nn.tasks import DetectionModel
 # ───Auth imports ───────────────────
 from .auth import create_access_token, get_current_user, get_password_hash, verify_password
 from datetime import timedelta
-from .models import UserLogin, Token, TeacherCreateByAdmin
+from .models import (
+    StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
+    UserLogin, Token, TeacherCreateByAdmin, TokenData
+)
 
 # Logging setup
 logging.basicConfig(
@@ -357,7 +360,10 @@ async def login(form_data: UserLogin):
 
 # Admin can create new teacher
 @app.post("/admin/create-teacher")
-async def create_teacher(teacher: TeacherCreateByAdmin, current_user: dict = Depends(get_current_user)):
+async def create_teacher(
+    teacher: TeacherCreateByAdmin, 
+    current_user: TokenData = Depends(get_current_user)
+):
     if current_user.role != "admin":
         raise HTTPException(403, detail="Only admin can create teachers")
     

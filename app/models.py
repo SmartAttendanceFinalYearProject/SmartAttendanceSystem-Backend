@@ -1,33 +1,23 @@
 from enum import Enum
 from pydantic import BaseModel, Field, EmailStr
-from typing import Optional, List, Dict
-from datetime import datetime
+from typing import Optional, List
+from datetime import datetime 
 
-
-# ====================== ENUMS ======================
-class AttendanceStatus(str, Enum):
-    PRESENT = "present"
-    ABSENT = "absent"
-
-class EmotionStatus(str, Enum):
-    HAPPY = "happy"
-    NEUTRAL = "neutral"
-    ANGRY = "angry"
-    UNKNOWN = "unknown"
-
-class PoseStatus(str, Enum):
-    STANDING = "standing"
-    SITTING = "sitting"
-    UNKNOWN = "unknown"
-
-
-# ====================== COMMON ======================
+# ====================== OLD DETECTION MODELS (Required by main.py) ======================
 class FaceBox(BaseModel):
     x1: int
     y1: int
     x2: int
     y2: int
     confidence: float
+
+class DetectionRequest(BaseModel):
+    image_base64: str
+
+class DetectionResponse(BaseModel):
+    total_faces: int
+    faces: List[FaceBox]
+    message: str
 
 
 # ====================== STUDENT ======================
@@ -56,7 +46,6 @@ class SubjectCreate(BaseModel):
     subject_name: str
     subject_code: str
 
-
 class SubjectOut(BaseModel):
     id: str
     subject_name: str
@@ -69,7 +58,6 @@ class TeacherCreate(BaseModel):
     subject_id: str
     username: str
     password: str
-
 
 class TeacherOut(BaseModel):
     id: str
@@ -93,7 +81,6 @@ class ClassCreate(BaseModel):
     end_date: datetime
     schedule: ClassSchedule
 
-
 class ClassOut(BaseModel):
     id: str
     class_name: str
@@ -105,25 +92,12 @@ class ClassOut(BaseModel):
     student_count: int = 0
 
 
-# ====================== ATTENDANCE ======================
-class AttendanceSessionCreate(BaseModel):
-    class_id: str
-    date: datetime = Field(default_factory=datetime.utcnow)
-
-
-class AttendanceRecord(BaseModel):
-    student_id: str
-    student_name: str
-    status: AttendanceStatus
-    emotion: Optional[str] = None
-    pose: Optional[str] = None
-    recognition_confidence: Optional[float] = None
-    timestamp: datetime
-
 # ====================== AUTH ======================
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    role: Optional[str] = None
+    full_name: Optional[str] = None
 
 class TokenData(BaseModel):
     username: Optional[str] = None
@@ -137,4 +111,4 @@ class TeacherCreateByAdmin(BaseModel):
     full_name: str
     subject_id: str
     username: str
-    password: str    
+    password: str
