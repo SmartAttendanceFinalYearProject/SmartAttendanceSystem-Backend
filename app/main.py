@@ -24,6 +24,11 @@ from .face_utils import extract_face_embedding, detect_faces_for_attendance
 from ultralytics import YOLO
 from ultralytics.nn.tasks import DetectionModel
 
+# ───Auth imports ───────────────────
+from .auth import create_access_token, get_current_user, get_password_hash, verify_password
+from datetime import timedelta
+from .models import UserLogin, Token, TeacherCreateByAdmin
+
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -325,6 +330,53 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
         logger.error(f"Attendance error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+
+@app.post("/login", response_model=Token)
+async def login(form_data: UserLogin):
+    """
+    Single login endpoint for both Admin and Teacher
+    """
+    # Find user by username
+    user = teachers_collection.find_one({"username": form_data.username})
+    
+    if not user or not verify_password(form_data.password, user.get("password")):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password"
+        )
+
+    # Create JWT token with role
+    access_token = create_access_token(
+        data={"sub": user["username"], "role": user["role"]}
+    )
+
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "role": user["role"],
+        "full_name": user.get("full_name")
+    }
+
+# Admin can create new teacher
+@app.post("/admin/create-teacher")
+async def create_teacher(teacher: TeacherCreateByAdmin, current_user: dict = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can create teachers")
+    
+    if teachers_collection.find_one({"username": teacher.username}):
+        raise HTTPException(400, detail="Username already exists")
+    
+    teacher_doc = {
+        "full_name": teacher.full_name,
+        "subject_id": teacher.subject_id,
+        "username": teacher.username,
+        "password": get_password_hash(teacher.password),
+        "role": "teacher",
+        "created_at": datetime.utcnow()
+    }
+    
+    result = teachers_collection.insert_one(teacher_doc)
+    return {"message": "Teacher created successfully", "teacher_id": str(result.inserted_id)}
         
 if __name__ == "__main__":
     import uvicorn

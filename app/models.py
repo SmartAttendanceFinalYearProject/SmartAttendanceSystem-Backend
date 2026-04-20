@@ -65,7 +65,7 @@ class SubjectOut(BaseModel):
 
 # ====================== TEACHER ======================
 class TeacherCreate(BaseModel):
-    teacher_name: str
+    full_name: str
     subject_id: str
     username: str
     password: str
@@ -73,7 +73,7 @@ class TeacherCreate(BaseModel):
 
 class TeacherOut(BaseModel):
     id: str
-    teacher_name: str
+    full_name: str
     subject_id: str
     username: str
 
@@ -119,3 +119,22 @@ class AttendanceRecord(BaseModel):
     pose: Optional[str] = None
     recognition_confidence: Optional[float] = None
     timestamp: datetime
+
+# ====================== AUTH ======================
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+    role: str = Field(..., pattern="^(admin|teacher)$")
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class TeacherCreateByAdmin(BaseModel):
+    full_name: str
+    subject_id: str
+    username: str
+    password: str    
