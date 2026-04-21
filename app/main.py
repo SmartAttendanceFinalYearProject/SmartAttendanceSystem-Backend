@@ -17,7 +17,7 @@ from .pose import predict_pose
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
-from .database import students_collection , teachers_collection
+from .database import students_collection , teachers_collection, subjects_collection, classes_collection
 from .face_utils import extract_face_embedding, detect_faces_for_attendance
 
 # ── YOLO imports (only when needed) ───────────────────────
@@ -29,7 +29,7 @@ from .auth import create_access_token, get_current_user, get_password_hash, veri
 from datetime import timedelta
 from .models import (
     StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
-    UserLogin, Token, TeacherCreateByAdmin, TokenData
+    UserLogin, Token, TeacherCreateByAdmin, TokenData, TeacherCreateByAdmin, ClassCreate, ClassOut
 )
 
 # Logging setup
@@ -427,7 +427,7 @@ async def create_class(
     )    
         
 
-        
+
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Smart Attendance API...")
