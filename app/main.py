@@ -502,18 +502,18 @@ async def delete_subject(
     return Response(status_code=204)
 
 
-# ====================== TEACHER ENDPOINTS ======================
+# ====================== ADMIN: CLASS MANAGEMENT ======================
 
-@app.post("/teacher/create-class", response_model=ClassOut)
+@app.post("/admin/classes", response_model=ClassOut)
 async def create_class(
     class_data: ClassCreate,
     current_user: TokenData = Depends(get_current_user)
 ):
     """
-    Teacher creates a new class
+    Admin creates a new class.
     """
-    if current_user.role != "teacher":
-        raise HTTPException(403, detail="Only teachers can create classes")
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admins can create classes")
 
     # Find subject by subject_code or _id
     subject = None
@@ -532,14 +532,14 @@ async def create_class(
     # Create class document
     class_doc = {
         "class_name": class_data.class_name,
-        "subject_id": str(subject["_id"]),           # Store as string for easier use
+        "subject_id": str(subject["_id"]),
         "subject_code": subject["subject_code"],
         "subject_name": subject["subject_name"],
-        "teacher_name": current_user.username,
+        "teacher_name": class_data.teacher_name,
         "start_date": class_data.start_date,
         "end_date": class_data.end_date,
         "schedule": class_data.schedule.dict(),
-        "students": [],                              # Empty list initially
+        "students": [],
         "created_at": datetime.utcnow(),
         "created_by": current_user.username
     }
@@ -555,6 +555,126 @@ async def create_class(
         end_date=class_doc["end_date"],
         schedule=class_data.schedule,
         student_count=0
+    )
+
+@app.put("/admin/classes/{class_id}", response_model=ClassOut)
+async def update_class(
+    class_id: str,
+    class_data: ClassUpdate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin updates an existing class.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can update classes")
+
+    try:
+        obj_id = ObjectId(class_id)
+    except:
+        raise HTTPException(400, "Invalid class ID format")
+
+    update_data = {k: v for k, v in class_data.dict(exclude_unset=True).items() if v is not None}
+    
+    if "schedule" in update_data and update_data["schedule"]:
+        update_data["schedule"] = update_data["schedule"].dict()
+
+    if not update_data:
+        raise HTTPException(400, "No update data provided")
+
+    updated_class = classes_collection.find_one_and_update(
+        {"_id": obj_id},
+        {"$set": update_data},
+        return_document=True
+    )
+
+    if not updated_class:
+        raise HTTPException(404, "Class not found")
+
+    return ClassOut(
+        id=str(updated_class["_id"]),
+        class_name=updated_class["class_name"],
+        subject_id=updated_class["subject_id"],
+        teacher_name=updated_class["teacher_name"],
+        start_date=updated_class["start_date"],
+        end_date=updated_class["end_date"],
+        schedule=updated_class["schedule"],
+        student_count=len(updated_class.get("students", []))
+    )
+
+@app.delete("/admin/classes/{class_id}", status_code=204)
+async def delete_class(
+    class_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin deletes a class.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can delete classes")
+
+    try:
+        obj_id = ObjectId(class_id)
+    except:
+        raise HTTPException(400, "Invalid class ID format")
+
+    result = classes_collection.delete_one({"_id": obj_id})
+
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Class not found")
+
+    return Response(status_code=204)
+
+# ====================== GENERAL CLASS ENDPOINTS ======================
+
+@app.get("/classes", response_model=List[ClassOut])
+async def get_all_classes(current_user: TokenData = Depends(get_current_user)):
+    """
+    Get all classes. Accessible by both Admin and Teacher.
+    """
+    if current_user.role not in ["admin", "teacher"]:
+        raise HTTPException(403, "Access forbidden")
+
+    classes = []
+    for cls in classes_collection.find():
+        classes.append(ClassOut(
+            id=str(cls["_id"]),
+            class_name=cls["class_name"],
+            subject_id=cls["subject_id"],
+            teacher_name=cls["teacher_name"],
+            start_date=cls["start_date"],
+            end_date=cls["end_date"],
+            schedule=cls["schedule"],
+            student_count=len(cls.get("students", []))
+        ))
+    return classes
+
+@app.get("/classes/{class_id}", response_model=ClassOut)
+async def get_class(class_id: str, current_user: TokenData = Depends(get_current_user)):
+    """
+    Get a single class by its ID. Accessible by both Admin and Teacher.
+    """
+    if current_user.role not in ["admin", "teacher"]:
+        raise HTTPException(403, "Access forbidden")
+        
+    try:
+        obj_id = ObjectId(class_id)
+    except:
+        raise HTTPException(400, "Invalid class ID format")
+
+    cls = classes_collection.find_one({"_id": obj_id})
+    if not cls:
+        raise HTTPException(404, "Class not found")
+
+    return ClassOut(
+        id=str(cls["_id"]),
+        class_name=cls["class_name"],
+        subject_id=cls["subject_id"],
+        teacher_name=cls["teacher_name"],
+        start_date=cls["start_date"],
+        end_date=cls["end_date"],
+        schedule=cls["schedule"],
+        student_count=len(cls.get("students", []))
     )
         
 

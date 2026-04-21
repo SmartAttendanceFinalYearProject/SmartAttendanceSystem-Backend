@@ -96,6 +96,15 @@ class ClassOut(BaseModel):
     student_count: int = 0
 
 
+class ClassUpdate(BaseModel):
+    class_name: Optional[str] = None
+    subject_id: Optional[str] = None
+    teacher_name: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    schedule: Optional[ClassSchedule] = None
+
+
 # ====================== AUTH ======================
 class Token(BaseModel):
     access_token: str
