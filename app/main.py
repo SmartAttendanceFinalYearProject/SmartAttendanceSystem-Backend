@@ -381,6 +381,52 @@ async def create_teacher(
     
     result = teachers_collection.insert_one(teacher_doc)
     return {"message": "Teacher created successfully", "teacher_id": str(result.inserted_id)}
+
+# ====================== TEACHER ENDPOINTS ======================
+
+@app.post("/teacher/create-class", response_model=ClassOut)
+async def create_class(
+    class_data: ClassCreate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Teacher can create a new class
+    """
+    if current_user.role != "teacher":
+        raise HTTPException(403, detail="Only teachers can create classes")
+
+    # Check if subject exists
+    subject = subjects_collection.find_one({"_id": ObjectId(class_data.subject_id)})
+    if not subject:
+        raise HTTPException(404, detail="Subject not found")
+
+    # Create class document
+    class_doc = {
+        "class_name": class_data.class_name,
+        "subject_id": class_data.subject_id,
+        "teacher_name": current_user.username,   # or use full_name if you prefer
+        "start_date": class_data.start_date,
+        "end_date": class_data.end_date,
+        "schedule": class_data.schedule.dict(),
+        "students": [],                          # empty list initially
+        "created_at": datetime.utcnow(),
+        "created_by": current_user.username
+    }
+
+    result = classes_collection.insert_one(class_doc)
+    
+    return ClassOut(
+        id=str(result.inserted_id),
+        class_name=class_doc["class_name"],
+        subject_id=class_doc["subject_id"],
+        teacher_name=class_doc["teacher_name"],
+        start_date=class_doc["start_date"],
+        end_date=class_doc["end_date"],
+        schedule=class_data.schedule,
+        student_count=0
+    )    
+        
+
         
 if __name__ == "__main__":
     import uvicorn
