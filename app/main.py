@@ -390,25 +390,36 @@ async def create_class(
     current_user: TokenData = Depends(get_current_user)
 ):
     """
-    Teacher can create a new class
+    Teacher creates a new class
     """
     if current_user.role != "teacher":
         raise HTTPException(403, detail="Only teachers can create classes")
 
-    # Check if subject exists
-    subject = subjects_collection.find_one({"_id": ObjectId(class_data.subject_id)})
+    # Find subject by subject_code or _id
+    subject = None
+    if len(class_data.subject_id) == 24:  # It's likely an ObjectId
+        try:
+            subject = subjects_collection.find_one({"_id": ObjectId(class_data.subject_id)})
+        except:
+            pass
+    else:
+        # Search by subject_code (most common case)
+        subject = subjects_collection.find_one({"subject_code": class_data.subject_id})
+
     if not subject:
-        raise HTTPException(404, detail="Subject not found")
+        raise HTTPException(404, detail=f"Subject not found with id/code: {class_data.subject_id}")
 
     # Create class document
     class_doc = {
         "class_name": class_data.class_name,
-        "subject_id": class_data.subject_id,
-        "teacher_name": current_user.username,   # or use full_name if you prefer
+        "subject_id": str(subject["_id"]),           # Store as string for easier use
+        "subject_code": subject["subject_code"],
+        "subject_name": subject["subject_name"],
+        "teacher_name": current_user.username,
         "start_date": class_data.start_date,
         "end_date": class_data.end_date,
         "schedule": class_data.schedule.dict(),
-        "students": [],                          # empty list initially
+        "students": [],                              # Empty list initially
         "created_at": datetime.utcnow(),
         "created_by": current_user.username
     }
@@ -424,7 +435,7 @@ async def create_class(
         end_date=class_doc["end_date"],
         schedule=class_data.schedule,
         student_count=0
-    )    
+    )
         
 
 
