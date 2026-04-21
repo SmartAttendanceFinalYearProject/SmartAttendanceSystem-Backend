@@ -51,6 +51,10 @@ class SubjectOut(BaseModel):
     subject_name: str
     subject_code: str
 
+class SubjectUpdate(BaseModel):
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
+
 
 # ====================== TEACHER ======================
 class TeacherCreate(BaseModel):

@@ -29,7 +29,7 @@ from .auth import create_access_token, get_current_user, get_password_hash, veri
 from datetime import timedelta
 from .models import (
     StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
-    UserLogin, Token, TeacherCreateByAdmin, TokenData, TeacherCreateByAdmin, ClassCreate, ClassOut
+    UserLogin, Token, TeacherCreateByAdmin, TokenData, TeacherCreateByAdmin, ClassCreate, ClassOut, SubjectOut
 )
 
 # Logging setup
@@ -381,6 +381,20 @@ async def create_teacher(
     
     result = teachers_collection.insert_one(teacher_doc)
     return {"message": "Teacher created successfully", "teacher_id": str(result.inserted_id)}
+
+@app.get("/subjects", response_model=List[SubjectOut])
+async def get_all_subjects():
+    """
+    Returns a list of all subjects in the database.
+    """
+    subjects = []
+    for subject in subjects_collection.find():
+        subjects.append(SubjectOut(
+            id=str(subject["_id"]),
+            subject_name=subject["subject_name"],
+            subject_code=subject["subject_code"]
+        ))
+    return subjects
 
 # ====================== TEACHER ENDPOINTS ======================
 
