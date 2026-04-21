@@ -29,7 +29,8 @@ from .auth import create_access_token, get_current_user, get_password_hash, veri
 from datetime import timedelta
 from .models import (
     StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
-    UserLogin, Token, TeacherCreateByAdmin, TokenData, ClassCreate, ClassOut, SubjectOut,
+    UserLogin, Token, TeacherCreateByAdmin, TokenData, ClassCreate, ClassOut,
+    ClassUpdate, SubjectOut,
     SubjectCreate, SubjectUpdate
 )
 
