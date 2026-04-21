@@ -209,11 +209,14 @@ async def detect_faces(request: DetectionRequest):
 
 @app.post("/register", response_model=StudentOut)
 async def register_student(
-    fullName: str = Form(..., min_length=2),  # Changed from name
-    studentID: str = Form(...),  # Changed from student_id, now required
-    department: Optional[str] = Form(None),  # New field
-    section: Optional[str] = Form(None),  # New field
-    email: Optional[str] = Form(None),  # New field
+    fullName: str = Form(..., min_length=2),
+    studentID: str = Form(...),
+    department: Optional[str] = Form(None),
+    section: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    batch: str = Form(...),
+    class_year: str = Form(...),
+    semester: str = Form(...),
     image: UploadFile = File(...)
 ):
     """
@@ -223,6 +226,9 @@ async def register_student(
     - department (optional)
     - section (optional)
     - email (optional)
+    - batch (required)
+    - class_year (required)
+    - semester (required)
     - image file (must contain one clear face)
     """
     try:
@@ -249,8 +255,11 @@ async def register_student(
             "department": department.strip() if department else None,
             "section": section.strip() if section else None,
             "email": email.strip() if email else None,
+            "batch": batch.strip(),
+            "class_year": class_year.strip(),
+            "semester": semester.strip(),
             "faceEmbedding": embedding.tolist(),  # numpy array → list[float]
-            "registrationDate": datetime.utcnow()  # Changed from created_at/updated_at
+            "registrationDate": datetime.utcnow()
         }
 
         # Check if studentID already exists
@@ -271,6 +280,9 @@ async def register_student(
             department=user_doc["department"],
             section=user_doc["section"],
             email=user_doc["email"],
+            batch=user_doc["batch"],
+            class_year=user_doc["class_year"],
+            semester=user_doc["semester"],
             registrationDate=user_doc["registrationDate"]
         )
 
@@ -517,18 +529,14 @@ async def create_class(
         raise HTTPException(403, detail="Only admins can create classes")
 
     # Find subject by subject_code or _id
-    subject = None
-    if len(class_data.subject_id) == 24:  # It's likely an ObjectId
-        try:
-            subject = subjects_collection.find_one({"_id": ObjectId(class_data.subject_id)})
-        except:
-            pass
-    else:
-        # Search by subject_code (most common case)
-        subject = subjects_collection.find_one({"subject_code": class_data.subject_id})
-
+    subject = subjects_collection.find_one({"_id": ObjectId(class_data.subject_id)})
     if not subject:
-        raise HTTPException(404, detail=f"Subject not found with id/code: {class_data.subject_id}")
+        raise HTTPException(404, detail=f"Subject not found with id: {class_data.subject_id}")
+
+    # Find teacher by teacher_id
+    teacher = teachers_collection.find_one({"_id": ObjectId(class_data.teacher_id)})
+    if not teacher:
+        raise HTTPException(404, detail=f"Teacher not found with id: {class_data.teacher_id}")
 
     # Create class document
     class_doc = {
@@ -536,11 +544,12 @@ async def create_class(
         "subject_id": str(subject["_id"]),
         "subject_code": subject["subject_code"],
         "subject_name": subject["subject_name"],
-        "teacher_name": class_data.teacher_name,
+        "teacher_id": str(teacher["_id"]),
+        "teacher_name": teacher["full_name"],
         "start_date": class_data.start_date,
         "end_date": class_data.end_date,
         "schedule": class_data.schedule.dict(),
-        "students": [],
+        "students": class_data.students,
         "created_at": datetime.utcnow(),
         "created_by": current_user.username
     }
@@ -551,11 +560,13 @@ async def create_class(
         id=str(result.inserted_id),
         class_name=class_doc["class_name"],
         subject_id=class_doc["subject_id"],
+        teacher_id=class_doc["teacher_id"],
         teacher_name=class_doc["teacher_name"],
         start_date=class_doc["start_date"],
         end_date=class_doc["end_date"],
         schedule=class_data.schedule,
-        student_count=0
+        student_count=len(class_doc["students"]),
+        students=class_doc["students"]
     )
 
 @app.put("/admin/classes/{class_id}", response_model=ClassOut)
@@ -580,6 +591,12 @@ async def update_class(
     if "schedule" in update_data and update_data["schedule"]:
         update_data["schedule"] = update_data["schedule"].dict()
 
+    if "teacher_id" in update_data:
+        teacher = teachers_collection.find_one({"_id": ObjectId(update_data["teacher_id"])})
+        if not teacher:
+            raise HTTPException(404, f"Teacher with id {update_data['teacher_id']} not found")
+        update_data["teacher_name"] = teacher["full_name"]
+
     if not update_data:
         raise HTTPException(400, "No update data provided")
 
@@ -596,11 +613,13 @@ async def update_class(
         id=str(updated_class["_id"]),
         class_name=updated_class["class_name"],
         subject_id=updated_class["subject_id"],
+        teacher_id=updated_class["teacher_id"],
         teacher_name=updated_class["teacher_name"],
         start_date=updated_class["start_date"],
         end_date=updated_class["end_date"],
         schedule=updated_class["schedule"],
-        student_count=len(updated_class.get("students", []))
+        student_count=len(updated_class.get("students", [])),
+        students=updated_class.get("students", [])
     )
 
 @app.delete("/admin/classes/{class_id}", status_code=204)
@@ -642,11 +661,13 @@ async def get_all_classes(current_user: TokenData = Depends(get_current_user)):
             id=str(cls["_id"]),
             class_name=cls["class_name"],
             subject_id=cls["subject_id"],
+            teacher_id=cls["teacher_id"],
             teacher_name=cls["teacher_name"],
             start_date=cls["start_date"],
             end_date=cls["end_date"],
             schedule=cls["schedule"],
-            student_count=len(cls.get("students", []))
+            student_count=len(cls.get("students", [])),
+            students=cls.get("students", [])
         ))
     return classes
 
@@ -671,11 +692,13 @@ async def get_class(class_id: str, current_user: TokenData = Depends(get_current
         id=str(cls["_id"]),
         class_name=cls["class_name"],
         subject_id=cls["subject_id"],
+        teacher_id=cls["teacher_id"],
         teacher_name=cls["teacher_name"],
         start_date=cls["start_date"],
         end_date=cls["end_date"],
         schedule=cls["schedule"],
-        student_count=len(cls.get("students", []))
+        student_count=len(cls.get("students", [])),
+        students=cls.get("students", [])
     )
         
 
