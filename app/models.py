@@ -27,7 +27,9 @@ class StudentCreate(BaseModel):
     department: Optional[str] = Field(None, max_length=100)
     section: Optional[str] = Field(None, max_length=50)
     email: Optional[EmailStr] = None
-    batch_class_year: str = Field(..., description="e.g. 2022, 2023, BCY2024")
+    batch: str = Field(..., description="e.g. 2022, 2023")
+    class_year: str = Field(..., description="e.g. 1st, 2nd, 3rd, 4th")
+    semester: str = Field(..., description="e.g. 1st, 2nd")
 
 
 class StudentOut(BaseModel):
@@ -37,7 +39,9 @@ class StudentOut(BaseModel):
     department: Optional[str]
     section: Optional[str]
     email: Optional[str]
-    batch_class_year: str
+    batch: str
+    class_year: str
+    semester: str
     registrationDate: datetime
 
 
@@ -71,29 +75,43 @@ class TeacherOut(BaseModel):
 
 
 # ====================== CLASS ======================
-class ClassSchedule(BaseModel):
-    days: List[str] = Field(..., example=["Monday", "Wednesday", "Friday"])
+class DaySchedule(BaseModel):
+    day: str = Field(..., example="Monday")
     start_time: str = Field(..., example="10:00 AM")
     end_time: str = Field(..., example="11:30 AM")
 
+class ClassSchedule(BaseModel):
+    schedule: List[DaySchedule]
 
 class ClassCreate(BaseModel):
     class_name: str
     subject_id: str
-    teacher_name: str
+    teacher_id: str
     start_date: datetime
     end_date: datetime
     schedule: ClassSchedule
+    students: List[str] = []
 
 class ClassOut(BaseModel):
     id: str
     class_name: str
     subject_id: str
+    teacher_id: str
     teacher_name: str
     start_date: datetime
     end_date: datetime
     schedule: ClassSchedule
     student_count: int = 0
+    students: List[str] = []
+
+class ClassUpdate(BaseModel):
+    class_name: Optional[str] = None
+    subject_id: Optional[str] = None
+    teacher_id: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    schedule: Optional[ClassSchedule] = None
+    students: Optional[List[str]] = None
 
 
 # ====================== AUTH ======================
