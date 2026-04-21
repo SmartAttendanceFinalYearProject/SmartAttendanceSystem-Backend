@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -29,7 +29,8 @@ from .auth import create_access_token, get_current_user, get_password_hash, veri
 from datetime import timedelta
 from .models import (
     StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
-    UserLogin, Token, TeacherCreateByAdmin, TokenData, TeacherCreateByAdmin, ClassCreate, ClassOut, SubjectOut
+    UserLogin, Token, TeacherCreateByAdmin, TokenData, ClassCreate, ClassOut, SubjectOut,
+    SubjectCreate, SubjectUpdate
 )
 
 # Logging setup
@@ -383,10 +384,14 @@ async def create_teacher(
     return {"message": "Teacher created successfully", "teacher_id": str(result.inserted_id)}
 
 @app.get("/subjects", response_model=List[SubjectOut])
-async def get_all_subjects():
+async def get_all_subjects(current_user: TokenData = Depends(get_current_user)):
     """
     Returns a list of all subjects in the database.
+    Accessible by both Admin and Teacher.
     """
+    if current_user.role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Access forbidden: requires admin or teacher role")
+        
     subjects = []
     for subject in subjects_collection.find():
         subjects.append(SubjectOut(
@@ -395,6 +400,107 @@ async def get_all_subjects():
             subject_code=subject["subject_code"]
         ))
     return subjects
+
+# ====================== ADMIN: SUBJECT MANAGEMENT ======================
+
+@app.post("/admin/subjects", response_model=SubjectOut)
+async def create_subject(
+    subject_data: SubjectCreate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin creates a new subject.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can create subjects")
+
+    if subjects_collection.find_one({"subject_code": subject_data.subject_code}):
+        raise HTTPException(400, f"Subject with code '{subject_data.subject_code}' already exists")
+
+    subject_doc = {
+        "subject_name": subject_data.subject_name,
+        "subject_code": subject_data.subject_code,
+        "created_at": datetime.utcnow()
+    }
+    
+    result = subjects_collection.insert_one(subject_doc)
+    
+    return SubjectOut(
+        id=str(result.inserted_id),
+        subject_name=subject_doc["subject_name"],
+        subject_code=subject_doc["subject_code"]
+    )
+
+
+@app.put("/admin/subjects/{subject_id}", response_model=SubjectOut)
+async def update_subject(
+    subject_id: str,
+    subject_data: SubjectUpdate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin updates an existing subject's name or code.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can update subjects")
+
+    try:
+        obj_id = ObjectId(subject_id)
+    except:
+        raise HTTPException(400, "Invalid subject ID format")
+
+    update_data = {k: v for k, v in subject_data.dict(exclude_unset=True).items()}
+    if not update_data:
+        raise HTTPException(400, "No update data provided")
+
+    # Check for duplicate subject_code if it's being changed
+    if "subject_code" in update_data:
+        existing = subjects_collection.find_one({
+            "subject_code": update_data["subject_code"],
+            "_id": {"$ne": obj_id}
+        })
+        if existing:
+            raise HTTPException(400, f"Another subject with code '{update_data['subject_code']}' already exists")
+
+    updated_subject = subjects_collection.find_one_and_update(
+        {"_id": obj_id},
+        {"$set": update_data},
+        return_document=True
+    )
+
+    if not updated_subject:
+        raise HTTPException(404, "Subject not found")
+
+    return SubjectOut(
+        id=str(updated_subject["_id"]),
+        subject_name=updated_subject["subject_name"],
+        subject_code=updated_subject["subject_code"]
+    )
+
+
+@app.delete("/admin/subjects/{subject_id}", status_code=204)
+async def delete_subject(
+    subject_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Admin deletes a subject.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can delete subjects")
+
+    try:
+        obj_id = ObjectId(subject_id)
+    except:
+        raise HTTPException(400, "Invalid subject ID format")
+
+    result = subjects_collection.delete_one({"_id": obj_id})
+
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Subject not found")
+
+    return Response(status_code=204)
+
 
 # ====================== TEACHER ENDPOINTS ======================
 
