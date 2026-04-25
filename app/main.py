@@ -30,7 +30,7 @@ from datetime import timedelta
 from .models import (
     StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
     UserLogin, Token, TeacherCreateByAdmin, TokenData, ClassCreate, ClassOut,
-    ClassUpdate, SubjectOut,
+    ClassUpdate, SubjectOut, TeacherOut, TeacherUpdate,
     SubjectCreate, SubjectUpdate
 )
 
@@ -396,6 +396,87 @@ async def create_teacher(
     result = teachers_collection.insert_one(teacher_doc)
     return {"message": "Teacher created successfully", "teacher_id": str(result.inserted_id)}
 
+@app.get("/admin/teachers", response_model=List[TeacherOut])
+async def get_all_teachers(current_user: TokenData = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can view teachers")
+
+    teachers = []
+    for teacher in teachers_collection.find({"role": "teacher"}):
+        teachers.append(
+            TeacherOut(
+                id=str(teacher["_id"]),
+                full_name=teacher["full_name"],
+                subject_id=teacher["subject_id"],
+                username=teacher["username"]
+            )
+        )
+    return teachers
+
+@app.put("/admin/teachers/{teacher_id}", response_model=TeacherOut)
+async def update_teacher(
+    teacher_id: str,
+    teacher_data: TeacherUpdate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can update teachers")
+
+    try:
+        obj_id = ObjectId(teacher_id)
+    except:
+        raise HTTPException(400, detail="Invalid teacher ID format")
+
+    update_data = {k: v for k, v in teacher_data.dict(exclude_unset=True).items() if v is not None}
+    if not update_data:
+        raise HTTPException(400, detail="No update data provided")
+
+    if "username" in update_data:
+        existing_user = teachers_collection.find_one({
+            "username": update_data["username"],
+            "_id": {"$ne": obj_id}
+        })
+        if existing_user:
+            raise HTTPException(400, detail="Username already exists")
+
+    if "password" in update_data:
+        update_data["password"] = get_password_hash(update_data["password"])
+
+    updated_teacher = teachers_collection.find_one_and_update(
+        {"_id": obj_id, "role": "teacher"},
+        {"$set": update_data},
+        return_document=True
+    )
+
+    if not updated_teacher:
+        raise HTTPException(404, detail="Teacher not found")
+
+    return TeacherOut(
+        id=str(updated_teacher["_id"]),
+        full_name=updated_teacher["full_name"],
+        subject_id=updated_teacher["subject_id"],
+        username=updated_teacher["username"]
+    )
+
+@app.delete("/admin/teachers/{teacher_id}", status_code=204)
+async def delete_teacher(
+    teacher_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can delete teachers")
+
+    try:
+        obj_id = ObjectId(teacher_id)
+    except:
+        raise HTTPException(400, detail="Invalid teacher ID format")
+
+    result = teachers_collection.delete_one({"_id": obj_id, "role": "teacher"})
+    if result.deleted_count == 0:
+        raise HTTPException(404, detail="Teacher not found")
+
+    return Response(status_code=204)
+
 @app.get("/subjects", response_model=List[SubjectOut])
 async def get_all_subjects(current_user: TokenData = Depends(get_current_user)):
     """
@@ -645,6 +726,27 @@ async def delete_class(
 
     return Response(status_code=204)
 
+# ====================== ADMIN: STUDENT LIST ======================
+
+@app.get("/admin/students")
+async def get_all_students(current_user: TokenData = Depends(get_current_user)):
+    """
+    Returns a lightweight list of all registered students (id, fullName, studentID).
+    Admin-only. Used to populate dropdowns on the frontend.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can view student list")
+
+    students = []
+    for s in students_collection.find({}, {"_id": 1, "fullName": 1, "studentID": 1}):
+        students.append({
+            "id": str(s["_id"]),
+            "fullName": s.get("fullName", ""),
+            "studentID": s.get("studentID", "")
+        })
+    return students
+
+
 # ====================== GENERAL CLASS ENDPOINTS ======================
 
 @app.get("/classes", response_model=List[ClassOut])
@@ -657,18 +759,33 @@ async def get_all_classes(current_user: TokenData = Depends(get_current_user)):
 
     classes = []
     for cls in classes_collection.find():
-        classes.append(ClassOut(
-            id=str(cls["_id"]),
-            class_name=cls["class_name"],
-            subject_id=cls["subject_id"],
-            teacher_id=cls["teacher_id"],
-            teacher_name=cls["teacher_name"],
-            start_date=cls["start_date"],
-            end_date=cls["end_date"],
-            schedule=cls["schedule"],
-            student_count=len(cls.get("students", [])),
-            students=cls.get("students", [])
-        ))
+        try:
+            # Coerce the stored schedule dict into the Pydantic model
+            raw_schedule = cls.get("schedule", {"schedule": []})
+            if isinstance(raw_schedule, dict):
+                from .models import ClassSchedule, DaySchedule as DS
+                day_rows = raw_schedule.get("schedule", [])
+                schedule_obj = ClassSchedule(
+                    schedule=[DS(**d) if isinstance(d, dict) else d for d in day_rows]
+                )
+            else:
+                schedule_obj = raw_schedule
+
+            classes.append(ClassOut(
+                id=str(cls["_id"]),
+                class_name=cls.get("class_name", ""),
+                subject_id=cls.get("subject_id", ""),
+                teacher_id=cls.get("teacher_id", ""),
+                teacher_name=cls.get("teacher_name", ""),
+                start_date=cls["start_date"],
+                end_date=cls["end_date"],
+                schedule=schedule_obj,
+                student_count=len(cls.get("students", [])),
+                students=cls.get("students", [])
+            ))
+        except Exception as e:
+            logger.warning(f"Skipping malformed class doc {cls.get('_id')}: {e}")
+            continue
     return classes
 
 @app.get("/classes/{class_id}", response_model=ClassOut)
@@ -688,15 +805,30 @@ async def get_class(class_id: str, current_user: TokenData = Depends(get_current
     if not cls:
         raise HTTPException(404, "Class not found")
 
+    try:
+        raw_schedule = cls.get("schedule", {"schedule": []})
+        if isinstance(raw_schedule, dict):
+            from .models import ClassSchedule, DaySchedule as DS
+            day_rows = raw_schedule.get("schedule", [])
+            schedule_obj = ClassSchedule(
+                schedule=[DS(**d) if isinstance(d, dict) else d for d in day_rows]
+            )
+        else:
+            schedule_obj = raw_schedule
+    except Exception as e:
+        logger.warning(f"Schedule parse error for class {class_id}: {e}")
+        from .models import ClassSchedule
+        schedule_obj = ClassSchedule(schedule=[])
+
     return ClassOut(
         id=str(cls["_id"]),
-        class_name=cls["class_name"],
-        subject_id=cls["subject_id"],
-        teacher_id=cls["teacher_id"],
-        teacher_name=cls["teacher_name"],
+        class_name=cls.get("class_name", ""),
+        subject_id=cls.get("subject_id", ""),
+        teacher_id=cls.get("teacher_id", ""),
+        teacher_name=cls.get("teacher_name", ""),
         start_date=cls["start_date"],
         end_date=cls["end_date"],
-        schedule=cls["schedule"],
+        schedule=schedule_obj,
         student_count=len(cls.get("students", [])),
         students=cls.get("students", [])
     )

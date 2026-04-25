@@ -73,6 +73,12 @@ class TeacherOut(BaseModel):
     subject_id: str
     username: str
 
+class TeacherUpdate(BaseModel):
+    full_name: Optional[str] = None
+    subject_id: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
 
 # ====================== CLASS ======================
 class DaySchedule(BaseModel):
