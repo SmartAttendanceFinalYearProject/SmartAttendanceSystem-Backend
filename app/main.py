@@ -742,11 +742,16 @@ async def get_all_students(current_user: TokenData = Depends(get_current_user)):
         raise HTTPException(403, detail="Only admin can view student list")
 
     students = []
-    for s in students_collection.find({}, {"_id": 1, "fullName": 1, "studentID": 1}):
+    for s in students_collection.find({}, {"_id": 1, "fullName": 1, "studentID": 1, "batch": 1, "class_year": 1, "semester": 1, "section": 1, "department": 1}):
         students.append({
             "id": str(s["_id"]),
             "fullName": s.get("fullName", ""),
-            "studentID": s.get("studentID", "")
+            "studentID": s.get("studentID", ""),
+            "batch": s.get("batch", ""),
+            "class_year": s.get("class_year", ""),
+            "semester": s.get("semester", ""),
+            "section": s.get("section", ""),
+            "department": s.get("department", "")
         })
     return students
 
