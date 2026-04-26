@@ -669,14 +669,18 @@ async def update_class(
 
     update_data = {k: v for k, v in class_data.dict(exclude_unset=True).items() if v is not None}
     
-    if "schedule" in update_data and update_data["schedule"]:
-        update_data["schedule"] = update_data["schedule"].dict()
-
     if "teacher_id" in update_data:
         teacher = teachers_collection.find_one({"_id": ObjectId(update_data["teacher_id"])})
         if not teacher:
             raise HTTPException(404, f"Teacher with id {update_data['teacher_id']} not found")
         update_data["teacher_name"] = teacher["full_name"]
+
+    if "subject_id" in update_data:
+        subject = subjects_collection.find_one({"_id": ObjectId(update_data["subject_id"])})
+        if not subject:
+            raise HTTPException(404, f"Subject with id {update_data['subject_id']} not found")
+        update_data["subject_code"] = subject["subject_code"]
+        update_data["subject_name"] = subject["subject_name"]
 
     if not update_data:
         raise HTTPException(400, "No update data provided")
