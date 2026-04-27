@@ -2,6 +2,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List
 from datetime import datetime 
+import uuid
 
 # ====================== OLD DETECTION MODELS (Required by main.py) ======================
 class FaceBox(BaseModel):
@@ -44,6 +45,11 @@ class StudentOut(BaseModel):
     semester: str
     registrationDate: datetime
 
+class StudentMinimal(BaseModel):
+    id: str
+    fullName: str
+    studentID: str
+
 
 # ====================== SUBJECT ======================
 class SubjectCreate(BaseModel):
@@ -80,6 +86,24 @@ class TeacherUpdate(BaseModel):
     password: Optional[str] = None
 
 
+# ====================== ATTENDANCE ======================
+class AttendanceRecord(BaseModel):
+    student_id: str
+    full_name: str
+    status: str  # "present" or "absent"
+    emotion: Optional[str] = None
+    pose: Optional[str] = None
+    recognition_confidence: Optional[float] = None
+    emotion_confidence: Optional[float] = None
+    pose_confidence: Optional[float] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+class AttendanceSession(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_date: datetime = Field(default_factory=datetime.utcnow)
+    records: List[AttendanceRecord]
+
+
 # ====================== CLASS ======================
 class DaySchedule(BaseModel):
     day: str = Field(..., example="Monday")
@@ -97,11 +121,14 @@ class ClassCreate(BaseModel):
     end_date: datetime
     schedule: ClassSchedule
     students: List[str] = []
+    attendance_sessions: List[AttendanceSession] = []
 
 class ClassOut(BaseModel):
     id: str
     class_name: str
     subject_id: str
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
     teacher_id: str
     teacher_name: str
     start_date: datetime
@@ -109,6 +136,8 @@ class ClassOut(BaseModel):
     schedule: ClassSchedule
     student_count: int = 0
     students: List[str] = []
+    student_details: List[StudentMinimal] = []
+    attendance_sessions: List[AttendanceSession] = []
 
 class ClassUpdate(BaseModel):
     class_name: Optional[str] = None
@@ -118,6 +147,7 @@ class ClassUpdate(BaseModel):
     end_date: Optional[datetime] = None
     schedule: Optional[ClassSchedule] = None
     students: Optional[List[str]] = None
+    attendance_sessions: Optional[List[AttendanceSession]] = None
 
 
 # ====================== AUTH ======================

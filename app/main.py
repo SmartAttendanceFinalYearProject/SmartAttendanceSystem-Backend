@@ -16,7 +16,7 @@ from .emotion import predict_emotion
 from .pose import predict_pose
 
 # ── Import project modules ────────────────────────────────
-from .models import StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest
+from .models import StudentCreate, StudentOut, StudentMinimal, FaceBox, DetectionResponse, DetectionRequest
 from .database import students_collection , teachers_collection, subjects_collection, classes_collection
 from .face_utils import extract_face_embedding, detect_faces_for_attendance
 
@@ -31,7 +31,7 @@ from .models import (
     StudentCreate, StudentOut, FaceBox, DetectionResponse, DetectionRequest,
     UserLogin, Token, TeacherCreateByAdmin, TokenData, ClassCreate, ClassOut,
     ClassUpdate, SubjectOut, TeacherOut, TeacherUpdate,
-    SubjectCreate, SubjectUpdate
+    SubjectCreate, SubjectUpdate, AttendanceRecord, AttendanceSession
 )
 
 # Logging setup
@@ -293,59 +293,169 @@ async def register_student(
         raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @app.post("/attendance/recognize")
-async def recognize_classroom_attendance(file: UploadFile = File(...)):
+async def recognize_classroom_attendance(
+    class_id: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: TokenData = Depends(get_current_user)
+):
     """
-    Full Attendance: Recognition + Emotion + Pose (Sitting/Standing)
+    Full Attendance: Recognition + Emotion + Pose + Save to Class
     """
     try:
+        # 1. Find the class
+        try:
+            obj_id = ObjectId(class_id)
+        except:
+            raise HTTPException(400, "Invalid class ID format")
+            
+        cls = classes_collection.find_one({"_id": obj_id})
+        if not cls:
+            raise HTTPException(404, "Class not found")
+
+        # 2. Process image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
         faces = detect_faces_for_attendance(image)
         
-        if not faces:
-            return {"status": "success", "message": "No faces detected", "results": []}
-
         results = []
-        for face in faces:
-            emb = np.array(face["embedding"], dtype=np.float32)
-            
-            # Student Recognition
-            student_recog = recognize_faces_in_classroom([face])[0]
-            
-            # Crop face for emotion
-            x1, y1, x2, y2 = face["bbox"]
-            face_crop = image.crop((x1, y1, x2, y2))
-            
-            emotion_result = predict_emotion(face_crop)
-            # pose_result = predict_pose(face_crop, face["bbox"], image.width, image.height)
-            pose_result = predict_pose(face, image.width, image.height)
-            
-            results.append({
-                "bbox": face["bbox"],
-                "student_id": student_recog["student_id"],
-                "full_name": student_recog["full_name"],
-                "recognition_confidence": student_recog["recognition_confidence"],
-                "recognized": student_recog["recognized"],
-                "emotion": emotion_result["emotion"],
-                "emotion_confidence": emotion_result["emotion_confidence"],
-                "pose": pose_result["pose"],
-                "pose_confidence": pose_result["pose_confidence"]
-            })
+        recognized_student_ids = set()
+        
+        if faces:
+            for face in faces:
+                # Student Recognition
+                student_recog = recognize_faces_in_classroom([face])[0]
+                
+                # Crop face for emotion
+                x1, y1, x2, y2 = face["bbox"]
+                face_crop = image.crop((x1, y1, x2, y2))
+                
+                emotion_result = predict_emotion(face_crop)
+                pose_result = predict_pose(face, image.width, image.height)
+                
+                record = AttendanceRecord(
+                    student_id=student_recog["student_id"],
+                    full_name=student_recog["full_name"],
+                    status="present" if student_recog["recognized"] else "unknown",
+                    emotion=emotion_result["emotion"],
+                    pose=pose_result["pose"],
+                    recognition_confidence=student_recog["recognition_confidence"],
+                    emotion_confidence=emotion_result["emotion_confidence"],
+                    pose_confidence=pose_result["pose_confidence"],
+                    timestamp=datetime.utcnow()
+                )
+                results.append(record)
+                if student_recog["recognized"]:
+                    recognized_student_ids.add(student_recog["student_id"])
 
-        present = [r["full_name"] for r in results if r["recognized"]]
+        # 3. Handle absent students
+        # The 'students' field in Class stores studentIDs (strings)
+        class_students_ids = cls.get("students", [])
+        for s_id in class_students_ids:
+            if s_id not in recognized_student_ids:
+                # Find student name
+                student_doc = students_collection.find_one({"studentID": s_id})
+                full_name = student_doc["fullName"] if student_doc else "Unknown Student"
+                
+                results.append(AttendanceRecord(
+                    student_id=s_id,
+                    full_name=full_name,
+                    status="absent",
+                    timestamp=datetime.utcnow()
+                ))
+
+        # 4. Create session and save
+        new_session = AttendanceSession(
+            session_date=datetime.utcnow(),
+            records=results
+        )
+        
+        classes_collection.update_one(
+            {"_id": obj_id},
+            {"$push": {"attendance_sessions": new_session.dict()}}
+        )
 
         return {
             "status": "success",
-            "total_faces_detected": len(faces),
-            "recognized_count": len(present),
-            "results": results,
-            "present_list": present
+            "session_id": new_session.id,
+            "total_faces_detected": len(faces) if faces else 0,
+            "recognized_count": len(recognized_student_ids),
+            "results": [r.dict() for r in results]
         }
 
     except Exception as e:
         logger.error(f"Attendance error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+
+@app.get("/teacher/classes", response_model=List[ClassOut])
+async def get_teacher_classes(current_user: TokenData = Depends(get_current_user)):
+    """
+    Get classes assigned to the logged-in teacher.
+    """
+    if current_user.role != "teacher":
+        raise HTTPException(403, "Only teachers can access this endpoint")
+
+    # Find the teacher document to get their ID if needed, 
+    # but we can also search classes by teacher_name or username if stored.
+    # Looking at create_class, teacher_id is stored as a string.
+    
+    teacher = teachers_collection.find_one({"username": current_user.username})
+    if not teacher:
+        raise HTTPException(404, "Teacher not found")
+        
+    teacher_id = str(teacher["_id"])
+    
+    classes = []
+    for cls in classes_collection.find({"teacher_id": teacher_id}):
+        try:
+            # Parse schedule
+            raw_schedule = cls.get("schedule", {"schedule": []})
+            if isinstance(raw_schedule, dict):
+                from .models import ClassSchedule, DaySchedule as DS
+                day_rows = raw_schedule.get("schedule", [])
+                schedule_obj = ClassSchedule(
+                    schedule=[DS(**d) if isinstance(d, dict) else d for d in day_rows]
+                )
+            else:
+                schedule_obj = raw_schedule
+
+            # Parse attendance sessions
+            sessions = []
+            for s in cls.get("attendance_sessions", []):
+                sessions.append(AttendanceSession(**s))
+
+            # Populate student details
+            student_details = []
+            for s_id in cls.get("students", []):
+                s_doc = students_collection.find_one({"studentID": s_id})
+                if s_doc:
+                    student_details.append(StudentMinimal(
+                        id=str(s_doc["_id"]),
+                        fullName=s_doc["fullName"],
+                        studentID=s_doc["studentID"]
+                    ))
+
+            classes.append(ClassOut(
+                id=str(cls["_id"]),
+                class_name=cls.get("class_name", ""),
+                subject_id=cls.get("subject_id", ""),
+                subject_name=cls.get("subject_name", ""),
+                subject_code=cls.get("subject_code", ""),
+                teacher_id=cls.get("teacher_id", ""),
+                teacher_name=cls.get("teacher_name", ""),
+                start_date=cls["start_date"],
+                end_date=cls["end_date"],
+                schedule=schedule_obj,
+                student_count=len(cls.get("students", [])),
+                students=cls.get("students", []),
+                student_details=student_details,
+                attendance_sessions=sessions
+            ))
+        except Exception as e:
+            logger.warning(f"Skipping malformed class doc {cls.get('_id')}: {e}")
+            continue
+    return classes
 
 
 @app.post("/login", response_model=Token)
@@ -641,6 +751,8 @@ async def create_class(
         id=str(result.inserted_id),
         class_name=class_doc["class_name"],
         subject_id=class_doc["subject_id"],
+        subject_name=class_doc["subject_name"],
+        subject_code=class_doc["subject_code"],
         teacher_id=class_doc["teacher_id"],
         teacher_name=class_doc["teacher_name"],
         start_date=class_doc["start_date"],
@@ -780,17 +892,37 @@ async def get_all_classes(current_user: TokenData = Depends(get_current_user)):
             else:
                 schedule_obj = raw_schedule
 
+            # Parse attendance sessions
+            sessions = []
+            for s in cls.get("attendance_sessions", []):
+                sessions.append(AttendanceSession(**s))
+
+            # Populate student details
+            student_details = []
+            for s_id in cls.get("students", []):
+                s_doc = students_collection.find_one({"studentID": s_id})
+                if s_doc:
+                    student_details.append(StudentMinimal(
+                        id=str(s_doc["_id"]),
+                        fullName=s_doc["fullName"],
+                        studentID=s_doc["studentID"]
+                    ))
+
             classes.append(ClassOut(
                 id=str(cls["_id"]),
                 class_name=cls.get("class_name", ""),
                 subject_id=cls.get("subject_id", ""),
+                subject_name=cls.get("subject_name", ""),
+                subject_code=cls.get("subject_code", ""),
                 teacher_id=cls.get("teacher_id", ""),
                 teacher_name=cls.get("teacher_name", ""),
                 start_date=cls["start_date"],
                 end_date=cls["end_date"],
                 schedule=schedule_obj,
                 student_count=len(cls.get("students", [])),
-                students=cls.get("students", [])
+                students=cls.get("students", []),
+                student_details=student_details,
+                attendance_sessions=sessions
             ))
         except Exception as e:
             logger.warning(f"Skipping malformed class doc {cls.get('_id')}: {e}")
@@ -829,17 +961,37 @@ async def get_class(class_id: str, current_user: TokenData = Depends(get_current
         from .models import ClassSchedule
         schedule_obj = ClassSchedule(schedule=[])
 
+    # Parse attendance sessions
+    sessions = []
+    for s in cls.get("attendance_sessions", []):
+        sessions.append(AttendanceSession(**s))
+
+    # Populate student details
+    student_details = []
+    for s_id in cls.get("students", []):
+        s_doc = students_collection.find_one({"studentID": s_id})
+        if s_doc:
+            student_details.append(StudentMinimal(
+                id=str(s_doc["_id"]),
+                fullName=s_doc["fullName"],
+                studentID=s_doc["studentID"]
+            ))
+
     return ClassOut(
         id=str(cls["_id"]),
         class_name=cls.get("class_name", ""),
         subject_id=cls.get("subject_id", ""),
+        subject_name=cls.get("subject_name", ""),
+        subject_code=cls.get("subject_code", ""),
         teacher_id=cls.get("teacher_id", ""),
         teacher_name=cls.get("teacher_name", ""),
         start_date=cls["start_date"],
         end_date=cls["end_date"],
         schedule=schedule_obj,
         student_count=len(cls.get("students", [])),
-        students=cls.get("students", [])
+        students=cls.get("students", []),
+        student_details=student_details,
+        attendance_sessions=sessions
     )
         
 
