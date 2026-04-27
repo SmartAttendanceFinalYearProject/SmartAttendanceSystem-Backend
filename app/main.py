@@ -364,23 +364,65 @@ async def recognize_classroom_attendance(
                     timestamp=datetime.utcnow()
                 ))
 
-        # 4. Create session and save
-        new_session = AttendanceSession(
-            session_date=datetime.utcnow(),
-            records=results
-        )
+        now = datetime.utcnow()
+        today = now.date()
         
-        classes_collection.update_one(
-            {"_id": obj_id},
-            {"$push": {"attendance_sessions": new_session.dict()}}
-        )
+        existing_sessions = cls.get("attendance_sessions", [])
+        target_session = None
+        for s in existing_sessions:
+            try:
+                # Handle both string and datetime formats safely
+                s_date_str = s.get("session_date")
+                if isinstance(s_date_str, str):
+                    s_date = datetime.fromisoformat(s_date_str.replace('Z', '+00:00'))
+                else:
+                    s_date = s_date_str
+                
+                if s_date.date() == today:
+                    target_session = s
+                    break
+            except:
+                pass
+                
+        if target_session:
+            existing_records = {r["student_id"]: r for r in target_session["records"]}
+            
+            for new_r in results:
+                s_id = new_r.student_id
+                if s_id in existing_records:
+                    # If already present, don't overwrite with absent
+                    if existing_records[s_id]["status"] == "present" and new_r.status == "absent":
+                        continue
+                    existing_records[s_id].update(new_r.dict())
+                else:
+                    existing_records[s_id] = new_r.dict()
+            
+            updated_records = list(existing_records.values())
+            session_id = target_session["id"]
+            
+            classes_collection.update_one(
+                {"_id": obj_id, "attendance_sessions.id": session_id},
+                {"$set": {"attendance_sessions.$.records": updated_records}}
+            )
+            final_results = updated_records
+        else:
+            new_session = AttendanceSession(
+                session_date=now,
+                records=results
+            )
+            classes_collection.update_one(
+                {"_id": obj_id},
+                {"$push": {"attendance_sessions": new_session.dict()}}
+            )
+            session_id = new_session.id
+            final_results = [r.dict() for r in results]
 
         return {
             "status": "success",
-            "session_id": new_session.id,
+            "session_id": session_id,
             "total_faces_detected": len(faces) if faces else 0,
             "recognized_count": len(recognized_student_ids),
-            "results": [r.dict() for r in results]
+            "results": final_results
         }
 
     except Exception as e:
