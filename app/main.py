@@ -295,11 +295,15 @@ async def register_student(
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(
     class_id: str = Form(...),
+    session_date: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
     file: UploadFile = File(...),
     current_user: TokenData = Depends(get_current_user)
 ):
     """
-    Full Attendance: Recognition + Emotion + Pose + Save to Class
+    Process image for face recognition, emotion, and pose.
+    Returns results without saving to the database.
     """
     try:
         # 1. Find the class
@@ -324,7 +328,10 @@ async def recognize_classroom_attendance(
         if faces:
             for face in faces:
                 # Student Recognition
-                student_recog = recognize_faces_in_classroom([face])[0]
+                student_recogs = recognize_faces_in_classroom([face])
+                if not student_recogs:
+                    continue
+                student_recog = student_recogs[0]
                 
                 # Crop face for emotion
                 x1, y1, x2, y2 = face["bbox"]
@@ -348,43 +355,123 @@ async def recognize_classroom_attendance(
                 if student_recog["recognized"]:
                     recognized_student_ids.add(student_recog["student_id"])
 
-        # 3. Handle absent students
-        # The 'students' field in Class stores studentIDs (strings)
-        class_students_ids = cls.get("students", [])
-        for s_id in class_students_ids:
-            if s_id not in recognized_student_ids:
-                # Find student name
-                student_doc = students_collection.find_one({"studentID": s_id})
-                full_name = student_doc["fullName"] if student_doc else "Unknown Student"
-                
-                results.append(AttendanceRecord(
-                    student_id=s_id,
-                    full_name=full_name,
-                    status="absent",
-                    timestamp=datetime.utcnow()
-                ))
-
-        # 4. Create session and save
-        new_session = AttendanceSession(
-            session_date=datetime.utcnow(),
-            records=results
-        )
-        
-        classes_collection.update_one(
-            {"_id": obj_id},
-            {"$push": {"attendance_sessions": new_session.dict()}}
-        )
-
         return {
             "status": "success",
-            "session_id": new_session.id,
             "total_faces_detected": len(faces) if faces else 0,
             "recognized_count": len(recognized_student_ids),
-            "results": [r.dict() for r in results]
+            "results": results
         }
 
     except Exception as e:
-        logger.error(f"Attendance error: {e}", exc_info=True)
+        logger.error(f"Recognition error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/attendance/approve")
+async def approve_attendance(
+    class_id: str = Form(...),
+    session_date: str = Form(...),
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    records_json: str = Form(...), # JSON string of AttendanceRecord list
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Finalize and save attendance records for a specific session.
+    """
+    try:
+        import json
+        records_data = json.loads(records_json)
+        
+        try:
+            obj_id = ObjectId(class_id)
+        except:
+            raise HTTPException(400, "Invalid class ID format")
+            
+        cls = classes_collection.find_one({"_id": obj_id})
+        if not cls:
+            raise HTTPException(404, "Class not found")
+
+        # Parse session_date
+        try:
+            parsed_session_date = datetime.fromisoformat(session_date.replace('Z', '+00:00'))
+        except:
+            parsed_session_date = datetime.utcnow()
+
+        # Handle absent students
+        # The 'students' field in Class stores studentIDs (strings)
+        class_students_ids = cls.get("students", [])
+        recognized_student_ids = {r["student_id"] for r in records_data if r.get("status") == "present"}
+        
+        final_records = []
+        for r in records_data:
+            final_records.append(AttendanceRecord(**r))
+            
+        for s_id in class_students_ids:
+            if s_id not in recognized_student_ids:
+                # Check if already in final_records (maybe as unknown or already marked absent)
+                if not any(r.student_id == s_id for r in final_records):
+                    # Find student name
+                    student_doc = students_collection.find_one({"studentID": s_id})
+                    full_name = student_doc["fullName"] if student_doc else "Unknown Student"
+                    
+                    final_records.append(AttendanceRecord(
+                        student_id=s_id,
+                        full_name=full_name,
+                        status="absent",
+                        timestamp=datetime.utcnow()
+                    ))
+
+        # Check if session already exists (matching by date and times)
+        existing_sessions = cls.get("attendance_sessions", [])
+        target_session_index = -1
+        
+        for i, s in enumerate(existing_sessions):
+            try:
+                s_date_val = s.get("session_date")
+                if isinstance(s_date_val, str):
+                    s_date = datetime.fromisoformat(s_date_val.replace('Z', '+00:00'))
+                else:
+                    s_date = s_date_val
+                
+                # Match by date and optionally start/end time
+                if s_date.date() == parsed_session_date.date() and \
+                   s.get("start_time") == start_time and \
+                   s.get("end_time") == end_time:
+                    target_session_index = i
+                    break
+            except:
+                pass
+        
+        if target_session_index >= 0:
+            # Update existing session
+            classes_collection.update_one(
+                {"_id": obj_id},
+                {"$set": {f"attendance_sessions.{target_session_index}.records": [r.dict() for r in final_records]}}
+            )
+            session_id = existing_sessions[target_session_index]["id"]
+        else:
+            # Create new session
+            new_session = AttendanceSession(
+                session_date=parsed_session_date,
+                start_time=start_time,
+                end_time=end_time,
+                records=final_records
+            )
+            classes_collection.update_one(
+                {"_id": obj_id},
+                {"$push": {"attendance_sessions": new_session.dict()}}
+            )
+            session_id = new_session.id
+
+        return {
+            "status": "success",
+            "message": "Attendance approved and saved",
+            "session_id": session_id
+        }
+
+    except Exception as e:
+        logger.error(f"Approval error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 

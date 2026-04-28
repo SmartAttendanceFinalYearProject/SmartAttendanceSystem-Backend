@@ -101,6 +101,8 @@ class AttendanceRecord(BaseModel):
 class AttendanceSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_date: datetime = Field(default_factory=datetime.utcnow)
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
     records: List[AttendanceRecord]
 
 
