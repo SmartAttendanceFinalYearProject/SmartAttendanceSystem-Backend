@@ -34,7 +34,7 @@ def load_emotion_model():
     checkpoint = torch.load(MODEL_PATH, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    print(f"✅ Emotion model loaded | Classes: {EMOTION_CLASSES}")
+    print(f"✅ Emotion model is loaded | Classes: {EMOTION_CLASSES}")
     return model
 
 

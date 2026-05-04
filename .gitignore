@@ -31,8 +31,8 @@ dataset/
 *.jpg
 *.jpeg
 *.png
-*.pth
 *.h5
+*.pth
 *.pt
 __pycache__/
 *.pyc
