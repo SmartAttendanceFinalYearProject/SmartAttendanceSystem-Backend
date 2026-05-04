@@ -692,7 +692,7 @@ async def get_all_subjects(current_user: TokenData = Depends(get_current_user)):
         ))
     return subjects
 
-# ====================== ADMIN: SUBJECT MANAGEMENT ======================
+# ====================== ADMIN: SUBJECT MANAGEMENT ==================
 
 @app.post("/admin/subjects", response_model=SubjectOut)
 async def create_subject(
@@ -1196,4 +1196,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True,           # good for development
         log_level="info"
-    )
+    )
