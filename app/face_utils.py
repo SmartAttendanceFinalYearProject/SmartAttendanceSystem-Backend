@@ -33,39 +33,8 @@ def extract_face_embedding(image: Image.Image) -> Optional[np.ndarray]:
 
 
 def detect_faces_for_attendance(image: Image.Image) -> List[dict]:
-    try:
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        faces = face_app.get(img_cv)
-
-        results = []
-        for face in faces:
-            bbox = face.bbox.astype(int).tolist()
-            # Add small padding to crop
-            x1, y1, x2, y2 = bbox
-            h, w = img_cv.shape[:2]
-            x1 = max(0, x1 - 10)
-            y1 = max(0, y1 - 10)
-            x2 = min(w, x2 + 10)
-            y2 = min(h, y2 + 10)
-
-            results.append({
-                "bbox": [x1, y1, x2, y2],
-                "confidence": float(face.det_score or 0.0),
-                "embedding": face.normed_embedding.tolist(),
-                "landmarks": face.landmark.astype(int).tolist() if hasattr(face, 'landmark') else None,
-                "pose": {
-                    "yaw": float(face.pose[0]),
-                    "pitch": float(face.pose[1]),
-                    "roll": float(face.pose[2])
-                } if hasattr(face, 'pose') else None,
-            })
-        return results
-
-    except Exception as e:
-        logger.error(f"Group detection failed: {e}", exc_info=True)
-        return []
     """
-    Returns ALL detected faces with bbox + embedding (for group attendance)
+    Returns ALL detected faces with safe handling
     """
     try:
         img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
@@ -73,10 +42,15 @@ def detect_faces_for_attendance(image: Image.Image) -> List[dict]:
 
         results = []
         for face in faces:
+            # Safe bbox
+            bbox = face.bbox.astype(int).tolist() if hasattr(face, 'bbox') and face.bbox is not None else [0,0,0,0]
+
+            # Safe landmarks
             landmarks = None
             if hasattr(face, 'landmark') and face.landmark is not None:
                 landmarks = face.landmark.astype(int).tolist()
 
+            # Safe pose
             pose = None
             if hasattr(face, 'pose') and face.pose is not None:
                 pose = {
@@ -86,9 +60,9 @@ def detect_faces_for_attendance(image: Image.Image) -> List[dict]:
                 }
 
             results.append({
-                "bbox": face.bbox.astype(int).tolist(),   # [x1, y1, x2, y2]
+                "bbox": bbox,
                 "confidence": float(face.det_score or 0.0),
-                "embedding": face.normed_embedding.tolist(),
+                "embedding": face.normed_embedding.tolist() if hasattr(face, 'normed_embedding') else None,
                 "landmarks": landmarks,
                 "pose": pose,
             })
