@@ -66,6 +66,48 @@ POSE_CLASSES = ["standing", "sitting"]
 def predict_all(image: Image.Image):
     """One model → Student + Emotion + Pose"""
     try:
+        # Convert to cv2
+        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Re-detect face on the cropped image for better alignment
+        faces = face_app.get(img_cv)
+        
+        if not faces:
+            # Fallback: use original crop
+            input_tensor = transform(image).unsqueeze(0).to(device)
+        else:
+            best_face = max(faces, key=lambda f: f.det_score or 0)
+            aligned = best_face.aligned if hasattr(best_face, 'aligned') and best_face.aligned is not None else image
+            input_tensor = transform(aligned).unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            student_out, emotion_out, pose_out = model(input_tensor)
+
+        # Student Recognition
+        student_idx = student_out.argmax(1).item()
+        student_name = id_to_student.get(student_idx, "Unknown")
+
+        # Emotion
+        emotion_idx = emotion_out.argmax(1).item()
+        emotion = EMOTION_CLASSES[emotion_idx]
+
+        # Pose
+        pose_idx = pose_out.argmax(1).item()
+        pose = POSE_CLASSES[pose_idx]
+
+        return {
+            "student_id": student_name,
+            "full_name": student_name,
+            "emotion": emotion,
+            "pose": pose,
+            "recognized": student_name != "Unknown"
+        }
+
+    except Exception as e:
+        print(f"Multi-task prediction error: {e}")
+        return None
+    """One model → Student + Emotion + Pose"""
+    try:
         img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         faces = face_app.get(img_cv)
 
