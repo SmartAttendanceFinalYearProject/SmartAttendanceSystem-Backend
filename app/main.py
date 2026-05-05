@@ -11,9 +11,7 @@ import logging
 import torch
 from bson.objectid import ObjectId
 from datetime import datetime
-from .recognizer import recognize_faces_in_classroom
-from .emotion import predict_emotion
-from .pose import predict_pose
+from .multitask_predict import predict_all
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, StudentMinimal, FaceBox, DetectionResponse, DetectionRequest
@@ -293,79 +291,51 @@ async def register_student(
         raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @app.post("/attendance/recognize")
-async def recognize_classroom_attendance(
-    class_id: str = Form(...),
-    session_date: str = Form(...),
-    start_time: str = Form(...),
-    end_time: str = Form(...),
-    file: UploadFile = File(...),
-    current_user: TokenData = Depends(get_current_user)
-):
+async def recognize_classroom_attendance(file: UploadFile = File(...)):
     """
-    Process image for face recognition, emotion, and pose.
-    Returns results without saving to the database.
+    One Model → Recognition + Emotion + Pose
     """
     try:
-        # 1. Find the class
-        try:
-            obj_id = ObjectId(class_id)
-        except:
-            raise HTTPException(400, "Invalid class ID format")
-            
-        cls = classes_collection.find_one({"_id": obj_id})
-        if not cls:
-            raise HTTPException(404, "Class not found")
-
-        # 2. Process image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
         faces = detect_faces_for_attendance(image)
         
+        if not faces:
+            return {"status": "success", "message": "No faces detected", "results": []}
+
         results = []
-        recognized_student_ids = set()
-        
-        if faces:
-            for face in faces:
-                # Student Recognition
-                student_recogs = recognize_faces_in_classroom([face])
-                if not student_recogs:
-                    continue
-                student_recog = student_recogs[0]
-                
-                # Crop face for emotion
-                x1, y1, x2, y2 = face["bbox"]
-                face_crop = image.crop((x1, y1, x2, y2))
-                
-                emotion_result = predict_emotion(face_crop)
-                pose_result = predict_pose(face, image.width, image.height)
-                
-                record = AttendanceRecord(
-                    student_id=student_recog["student_id"],
-                    full_name=student_recog["full_name"],
-                    status="present" if student_recog["recognized"] else "unknown",
-                    emotion=emotion_result["emotion"],
-                    pose=pose_result["pose"],
-                    recognition_confidence=student_recog["recognition_confidence"],
-                    emotion_confidence=emotion_result["emotion_confidence"],
-                    pose_confidence=pose_result["pose_confidence"],
-                    timestamp=datetime.utcnow()
-                )
-                results.append(record)
-                if student_recog["recognized"]:
-                    recognized_student_ids.add(student_recog["student_id"])
+        for face in faces:
+            # Crop face
+            x1, y1, x2, y2 = face["bbox"]
+            face_crop = image.crop((x1, y1, x2, y2))
+            
+            # Use single multi-task model
+            prediction = predict_all(face_crop)
+            
+            if prediction:
+                results.append({
+                    "bbox": face["bbox"],
+                    "student_id": prediction["student_id"],
+                    "full_name": prediction["full_name"],
+                    "emotion": prediction["emotion"],
+                    "pose": prediction["pose"],
+                    "recognized": prediction["recognized"]
+                })
+
+        present = [r["full_name"] for r in results if r["recognized"]]
 
         return {
             "status": "success",
-            "total_faces_detected": len(faces) if faces else 0,
-            "recognized_count": len(recognized_student_ids),
-            "results": results
+            "total_faces_detected": len(faces),
+            "recognized_count": len(present),
+            "results": results,
+            "present_list": present
         }
 
     except Exception as e:
         logger.error(f"Recognition error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
-
 
 @app.post("/attendance/approve")
 async def approve_attendance(

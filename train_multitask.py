@@ -18,7 +18,7 @@ MODEL_SAVE_PATH = "models/multitask_model.pth"
 CHECKPOINT_PATH = "models/multitask_checkpoint.pth"
 
 BATCH_SIZE = 16
-NUM_EPOCHS = 25
+NUM_EPOCHS = 5
 LEARNING_RATE = 0.001
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
