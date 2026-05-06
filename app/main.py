@@ -310,25 +310,40 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
             x1, y1, x2, y2 = face["bbox"]
             face_crop = image.crop((x1, y1, x2, y2))
             
-            # Use single multi-task model
+            # 1. Use multi-task model for emotion and pose
             prediction = predict_all(face_crop)
             
             if prediction:
+                # 2. Use embedding to lookup real student name in database
+                from .recognizer import recognize_student
+                emb = np.array(face["embedding"], dtype=np.float32)
+                db_result = recognize_student(emb)
+                
+                # Ground truth for identity: Database lookup via embedding
+                if db_result["recognized"]:
+                    student_id = db_result["student_id"]
+                    full_name = db_result["full_name"]
+                    is_recognized = True
+                else:
+                    # Fallback to model prediction if database search fails
+                    student_id = prediction["student_id"]
+                    full_name = prediction["full_name"]
+                    is_recognized = prediction["recognized"]
+                    
+                    # One last check: if model gave a label, try finding it by ID
+                    if is_recognized:
+                        student_doc = students_collection.find_one({"studentID": student_id})
+                        if student_doc:
+                            full_name = student_doc.get("fullName", full_name)
+
                 results.append({
                     "bbox": face["bbox"],
-                    "student_id": prediction["student_id"],
-                    "full_name": prediction["full_name"],
+                    "student_id": student_id,
+                    "full_name": full_name,
                     "emotion": prediction["emotion"],
                     "pose": prediction["pose"],
-                    "recognized": prediction["recognized"]
+                    "recognized": is_recognized
                 })
-
-        # Update full_name from database for recognized students
-        for r in results:
-            if r["recognized"]:
-                student_doc = students_collection.find_one({"studentID": r["student_id"]})
-                if student_doc:
-                    r["full_name"] = student_doc.get("fullName", r["full_name"])
 
         present = [r["full_name"] for r in results if r["recognized"]]
 
