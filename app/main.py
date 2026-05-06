@@ -323,6 +323,13 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
                     "recognized": prediction["recognized"]
                 })
 
+        # Update full_name from database for recognized students
+        for r in results:
+            if r["recognized"]:
+                student_doc = students_collection.find_one({"studentID": r["student_id"]})
+                if student_doc:
+                    r["full_name"] = student_doc.get("fullName", r["full_name"])
+
         present = [r["full_name"] for r in results if r["recognized"]]
 
         return {

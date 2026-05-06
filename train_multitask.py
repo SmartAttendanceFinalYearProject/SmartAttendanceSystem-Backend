@@ -10,7 +10,6 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import insightface
-from collections import defaultdict
 
 # ========================= CONFIG =========================
 DATA_PATH = Path("dataset/raw_data/student_photos")
@@ -18,7 +17,7 @@ MODEL_SAVE_PATH = "models/multitask_model.pth"
 CHECKPOINT_PATH = "models/multitask_checkpoint.pth"
 
 BATCH_SIZE = 16
-NUM_EPOCHS = 5
+NUM_EPOCHS = 15          # ← Increased from 5 to 15
 LEARNING_RATE = 0.001
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -32,7 +31,7 @@ face_app.prepare(ctx_id=0, det_size=(640, 640))
 class MultiTaskDataset(Dataset):
     def __init__(self, transform=None):
         self.transform = transform
-        self.samples = []  # (image_path, student_label, emotion_label, pose_label)
+        self.samples = []  
 
         student_to_id = {}
         student_id = 0
@@ -47,11 +46,11 @@ class MultiTaskDataset(Dataset):
 
             s_id = student_to_id[student_dir.name]
 
-            # Recognition images → Neutral
+            # Recognition images → Neutral + Standing
             recog_dir = student_dir / "recognition"
             if recog_dir.exists():
                 for img_path in recog_dir.glob("*.jpg"):
-                    self.samples.append((img_path, s_id, 0, 0))  # 0 = neutral, 0 = standing
+                    self.samples.append((img_path, s_id, 0, 0))  
 
             # Emotion folder
             emotion_dir = student_dir / "emotion"
@@ -59,14 +58,14 @@ class MultiTaskDataset(Dataset):
                 for img_path in emotion_dir.glob("*.jpg"):
                     fname = img_path.name.lower()
                     emotion_label = 1 if "happy" in fname else 2 if "angry" in fname else 0
-                    self.samples.append((img_path, s_id, emotion_label, 1))  # assume sitting
+                    self.samples.append((img_path, s_id, emotion_label, 1))  
 
             # Pose folder
             pose_dir = student_dir / "pose"
             if pose_dir.exists():
                 for img_path in pose_dir.glob("*.jpg"):
                     fname = img_path.name.lower()
-                    pose_label = 1 if "sitting" in fname else 0  # 0=standing, 1=sitting
+                    pose_label = 1 if "sitting" in fname else 0
                     self.samples.append((img_path, s_id, 0, pose_label))
 
         print(f"Loaded {len(self.samples)} samples | Students: {len(student_to_id)}")
@@ -81,7 +80,7 @@ class MultiTaskDataset(Dataset):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         faces = face_app.get(image)
-        if len(faces) > 0 and faces[0].aligned is not None:
+        if len(faces) > 0 and hasattr(faces[0], 'aligned') and faces[0].aligned is not None:
             pil_image = Image.fromarray(faces[0].aligned)
         else:
             pil_image = Image.fromarray(image)
@@ -107,19 +106,15 @@ class MultiTaskModel(nn.Module):
         super().__init__()
         self.backbone = models.resnet18(weights='IMAGENET1K_V1')
         self.feature_dim = self.backbone.fc.in_features
-        self.backbone.fc = nn.Identity()   # Remove final layer
+        self.backbone.fc = nn.Identity()
 
-        # Three heads
         self.student_head = nn.Linear(self.feature_dim, num_students)
-        self.emotion_head = nn.Linear(self.feature_dim, 3)   # neutral, happy, angry
-        self.pose_head = nn.Linear(self.feature_dim, 2)      # standing, sitting
+        self.emotion_head = nn.Linear(self.feature_dim, 3)
+        self.pose_head = nn.Linear(self.feature_dim, 2)
 
     def forward(self, x):
         features = self.backbone(x)
-        student_out = self.student_head(features)
-        emotion_out = self.emotion_head(features)
-        pose_out = self.pose_head(features)
-        return student_out, emotion_out, pose_out
+        return self.student_head(features), self.emotion_head(features), self.pose_head(features)
 
 
 # ========================= TRAINING =========================
@@ -133,9 +128,19 @@ if __name__ == "__main__":
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss()
 
-    print(f"Starting Multi-Task Training | Students: {num_students} | Samples: {len(dataset)}")
+    start_epoch = 0
 
-    for epoch in range(NUM_EPOCHS):
+    # Resume from checkpoint if exists
+    if os.path.exists(CHECKPOINT_PATH):
+        print("✅ Resuming from checkpoint...")
+        checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0)
+
+    print(f"Starting Multi-Task Training from epoch {start_epoch+1} | Students: {num_students} | Samples: {len(dataset)}")
+
+    for epoch in range(start_epoch, NUM_EPOCHS):
         model.train()
         total_loss = 0
         correct_student = correct_emotion = correct_pose = 0
@@ -169,7 +174,14 @@ if __name__ == "__main__":
               f"Emotion Acc: {100*correct_emotion/total:.2f}% | "
               f"Pose Acc: {100*correct_pose/total:.2f}%")
 
-    # Save model
+        # Save checkpoint
+        torch.save({
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, CHECKPOINT_PATH)
+
+    # Final save
     os.makedirs("models", exist_ok=True)
     torch.save({
         'model_state_dict': model.state_dict(),
