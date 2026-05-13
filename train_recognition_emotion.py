@@ -12,9 +12,9 @@ from tqdm import tqdm
 import insightface
 
 # ========================= CONFIG =========================
-DATA_PATH = Path("dataset/raw_data/student_photos")
-MODEL_SAVE_PATH = "models/recog_emotion_model.pth"
-CHECKPOINT_PATH = "models/recog_emotion_checkpoint.pth"
+DATA_PATH = Path("/content/drive/MyDrive/student_photos")
+MODEL_SAVE_PATH = "/content/drive/MyDrive/models/recog_emotion_model.pth"
+CHECKPOINT_PATH = "/content/drive/MyDrive/models/recog_emotion_checkpoint.pth"
 
 BATCH_SIZE = 8
 NUM_EPOCHS = 100
@@ -24,11 +24,14 @@ PATIENCE = 12
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# InsightFace for face alignment
-face_app = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+# ========================= INSIGHTFACE - FORCE CPU =========================
+face_app = insightface.app.FaceAnalysis(
+    name='buffalo_l', 
+    providers=['CPUExecutionProvider']   # ← Changed to CPU to avoid CUDA error
+)
 face_app.prepare(ctx_id=0, det_size=(640, 640))
 
-# Strong data augmentation
+# Transform
 transform = transforms.Compose([
     transforms.Resize((112, 112)),
     transforms.RandomHorizontalFlip(p=0.5),
@@ -40,41 +43,44 @@ transform = transforms.Compose([
 
 # ========================= DATASET =========================
 class RecogEmotionDataset(Dataset):
-    def __init__(self, transform=None, split="train"):
+    def __init__(self, split="train", transform=None):
         self.transform = transform
-        self.samples = []   # (image_path, student_id, emotion_label)
+        self.samples = []  
 
         student_to_id = {}
         sid = 0
 
-        base_path = DATA_PATH / split
+        print(f"Scanning {split} data...")
 
-        for student_dir in sorted(base_path.iterdir()):
-            if not student_dir.is_dir():
-                continue
+        # RECOGNITION
+        recog_base = DATA_PATH / "recognition" / split
+        if recog_base.exists():
+            for img_path in recog_base.rglob("*.*"):
+                if img_path.suffix.lower() not in ['.jpg', '.jpeg', '.png']:
+                    continue
+                student_name = img_path.parent.name
+                if student_name not in student_to_id:
+                    student_to_id[student_name] = sid
+                    sid += 1
+                s_id = student_to_id[student_name]
+                self.samples.append((img_path, s_id, 0))
 
-            if student_dir.name not in student_to_id:
-                student_to_id[student_dir.name] = sid
-                sid += 1
-            s_id = student_to_id[student_dir.name]
-
-            # === Recognition Folder (Neutral) ===
-            recog_dir = student_dir / "recognition"
-            if recog_dir.exists():
-                for ext in ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG", "*.heic"]:
-                    for img_path in recog_dir.glob(ext):
-                        self.samples.append((img_path, s_id, 0))  # 0 = neutral
-
-            # === Emotion Folder ===
-            emotion_dir = student_dir / "emotion"
-            if emotion_dir.exists():
-                emotion_map = {"neutral": 0, "happy": 1, "angry": 2}
-                for emotion_name, label in emotion_map.items():
-                    cls_dir = emotion_dir / emotion_name
-                    if cls_dir.exists():
-                        for ext in ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG", "*.heic"]:
-                            for img_path in cls_dir.glob(ext):
-                                self.samples.append((img_path, s_id, label))
+        # EMOTION
+        emotion_base = DATA_PATH / "emotion" / split
+        if emotion_base.exists():
+            emotion_map = {"neutral": 0, "happy": 1, "angry": 2}
+            for emotion_name, label in emotion_map.items():
+                cls_path = emotion_base / emotion_name
+                if cls_path.exists():
+                    for img_path in cls_path.rglob("*.*"):
+                        if img_path.suffix.lower() not in ['.jpg', '.jpeg', '.png']:
+                            continue
+                        student_name = img_path.parent.name
+                        if student_name not in student_to_id:
+                            student_to_id[student_name] = sid
+                            sid += 1
+                        s_id = student_to_id[student_name]
+                        self.samples.append((img_path, s_id, label))
 
         print(f"[{split.upper()}] Loaded {len(self.samples)} images | Students: {len(student_to_id)}")
 
@@ -84,13 +90,11 @@ class RecogEmotionDataset(Dataset):
     def __getitem__(self, idx):
         img_path, student_label, emotion_label = self.samples[idx]
 
-        # Read image
         image = cv2.imread(str(img_path))
         if image is None:
-            image = np.zeros((224, 224, 3), dtype=np.uint8)
+            image = np.zeros((112, 112, 3), dtype=np.uint8)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Face alignment using buffalo_l
         faces = face_app.get(image)
         if len(faces) > 0 and hasattr(faces[0], 'aligned') and faces[0].aligned is not None:
             pil_img = Image.fromarray(faces[0].aligned)
@@ -121,66 +125,66 @@ class RecogEmotionModel(nn.Module):
 
 # ========================= TRAINING =========================
 if __name__ == "__main__":
-    train_dataset = RecogEmotionDataset(transform=transform, split="train")
+    train_dataset = RecogEmotionDataset(split="train", transform=transform)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                              num_workers=2, pin_memory=True)
+    if len(train_dataset) == 0:
+        print("❌ No images found!")
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                                  num_workers=2, pin_memory=True)
 
-    num_students = len(set(s[1] for s in train_dataset.samples))
+        num_students = len(set(s[1] for s in train_dataset.samples))
+        model = RecogEmotionModel(num_students).to(device)
 
-    model = RecogEmotionModel(num_students).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-    criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+        criterion = nn.CrossEntropyLoss()
 
-    best_loss = float('inf')
-    patience_counter = 0
+        best_loss = float('inf')
+        patience_counter = 0
 
-    print(f"Starting Training | Students: {num_students} | Epochs: {NUM_EPOCHS} | Batch Size: {BATCH_SIZE}")
+        print(f"Starting Training | Students: {num_students} | Epochs: {NUM_EPOCHS}")
 
-    for epoch in range(NUM_EPOCHS):
-        model.train()
-        total_loss = 0.0
-        correct_student = correct_emotion = 0
-        total = 0
+        for epoch in range(NUM_EPOCHS):
+            model.train()
+            total_loss = 0.0
+            correct_student = correct_emotion = 0
+            total = 0
 
-        for images, student_labels, emotion_labels in tqdm(train_loader):
-            images = images.to(device)
-            student_labels = student_labels.to(device)
-            emotion_labels = emotion_labels.to(device)
+            for images, student_labels, emotion_labels in tqdm(train_loader):
+                images = images.to(device)
+                student_labels = student_labels.to(device)
+                emotion_labels = emotion_labels.to(device)
 
-            optimizer.zero_grad()
-            student_out, emotion_out = model(images)
+                optimizer.zero_grad()
+                student_out, emotion_out = model(images)
 
-            loss = criterion(student_out, student_labels) + criterion(emotion_out, emotion_labels)
+                loss = criterion(student_out, student_labels) + criterion(emotion_out, emotion_labels)
 
-            loss.backward()
-            optimizer.step()
+                loss.backward()
+                optimizer.step()
 
-            total_loss += loss.item()
-            total += images.size(0)
+                total_loss += loss.item()
+                total += images.size(0)
 
-            correct_student += (student_out.argmax(1) == student_labels).sum().item()
-            correct_emotion += (emotion_out.argmax(1) == emotion_labels).sum().item()
+                correct_student += (student_out.argmax(1) == student_labels).sum().item()
+                correct_emotion += (emotion_out.argmax(1) == emotion_labels).sum().item()
 
-        avg_loss = total_loss / len(train_loader)
-        student_acc = 100 * correct_student / total
-        emotion_acc = 100 * correct_emotion / total
+            avg_loss = total_loss / len(train_loader)
+            print(f"Epoch [{epoch+1}/{NUM_EPOCHS}] Loss: {avg_loss:.4f} | "
+                  f"Student Acc: {100*correct_student/total:.2f}% | "
+                  f"Emotion Acc: {100*correct_emotion/total:.2f}%")
 
-        print(f"Epoch [{epoch+1}/{NUM_EPOCHS}] Loss: {avg_loss:.4f} | "
-              f"Student Acc: {student_acc:.2f}% | Emotion Acc: {emotion_acc:.2f}%")
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'num_students': num_students,
+                }, MODEL_SAVE_PATH)
+            else:
+                patience_counter += 1
+                if patience_counter >= PATIENCE:
+                    print("✅ Early stopping triggered!")
+                    break
 
-        # Early Stopping
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            patience_counter = 0
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'num_students': num_students,
-            }, MODEL_SAVE_PATH)
-        else:
-            patience_counter += 1
-            if patience_counter >= PATIENCE:
-                print("✅ Early stopping triggered!")
-                break
-
-    print(f"\n🎉 Training Completed! Model saved to: {MODEL_SAVE_PATH}")
+        print(f"\n🎉 Training Completed! Best model saved to: {MODEL_SAVE_PATH}")
