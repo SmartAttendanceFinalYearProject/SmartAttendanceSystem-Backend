@@ -3,9 +3,8 @@ from ultralytics import YOLO
 from pathlib import Path
 
 # ========================= CONFIG =========================
-DATA_PATH = Path("/content/drive/MyDrive/student_photos/pose")   # Root pose folder
-DATASET_YAML = "/content/pose_dataset.yaml"   # We will create this
-
+DATA_PATH = Path("/content/drive/MyDrive/student_photos/pose")
+DATASET_YAML = "/content/pose_dataset.yaml"
 MODEL_SAVE_PATH = "/content/drive/MyDrive/models/yolov8_pose_sitting_standing.pt"
 
 # ========================= CREATE DATASET YAML =========================
@@ -17,26 +16,27 @@ val: test
 names:
   0: person
 
-# For pose, we use YOLOv8 Pose keypoints
+# YOLOv8 Pose settings
 kpt_shape: [17, 3]   # 17 keypoints (COCO format)
 """
 
 with open(DATASET_YAML, "w") as f:
-    f.write(yaml_content)
+    f.write(yaml_content.strip())
 
-print("✅ pose_dataset.yaml created")
+print("✅ Dataset YAML created successfully!")
 
-# ========================= LOAD YOLOv8 POSE MODEL =========================
-model = YOLO("yolov8s-pose.pt")   # Good balance between speed and accuracy
+# ========================= TRAIN YOLOv8 POSE =========================
+model = YOLO("yolov8s-pose.pt")   # Best balance
 
-# ========================= TRAINING =========================
+print("🚀 Starting YOLOv8 Pose Training...")
+
 results = model.train(
     data=DATASET_YAML,
     epochs=100,
     imgsz=640,
     batch=8,
     name="yolov8_pose_sitting_standing",
-    patience=20,                    # Early stopping
+    patience=20,
     save=True,
     project="/content/drive/MyDrive/models",
     exist_ok=True,
@@ -47,11 +47,16 @@ results = model.train(
     momentum=0.937,
     weight_decay=0.0005,
     warmup_epochs=3,
-    # Pose specific
-    kpt_shape=[17, 3],
     conf=0.25,
     iou=0.7,
+    # Pose specific
+    kpt_shape=[17, 3],
+    degrees=10.0,           # augmentation
+    translate=0.1,
+    scale=0.5,
+    fliplr=0.5,
 )
 
-print(f"✅ Training Completed! Best model saved at:")
+print("\n🎉 Training Completed!")
+print("Best model saved at:")
 print(results.save_dir / "weights/best.pt")
