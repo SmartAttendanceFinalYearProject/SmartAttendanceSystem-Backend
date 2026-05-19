@@ -11,7 +11,8 @@ import logging
 import torch
 from bson.objectid import ObjectId
 from datetime import datetime
-from .multitask_predict import predict_all
+from .recog_emotion_predict import predict_recog_emotion
+from .pose_predict import predict_pose
 
 # ── Import project modules ────────────────────────────────
 from .models import StudentCreate, StudentOut, StudentMinimal, FaceBox, DetectionResponse, DetectionRequest
@@ -292,9 +293,6 @@ async def register_student(
 
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(file: UploadFile = File(...)):
-    """
-    One Model → Recognition + Emotion + Pose
-    """
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -306,44 +304,23 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
 
         results = []
         for face in faces:
-            # Crop face
             x1, y1, x2, y2 = face["bbox"]
             face_crop = image.crop((x1, y1, x2, y2))
             
-            # 1. Use multi-task model for emotion and pose
-            prediction = predict_all(face_crop)
+            # Recognition + Emotion
+            recog_emotion = predict_recog_emotion(face_crop)
             
-            if prediction:
-                # 2. Use embedding to lookup real student name in database
-                from .recognizer import recognize_student
-                emb = np.array(face["embedding"], dtype=np.float32)
-                db_result = recognize_student(emb)
-                
-                # Ground truth for identity: Database lookup via embedding
-                if db_result["recognized"]:
-                    student_id = db_result["student_id"]
-                    full_name = db_result["full_name"]
-                    is_recognized = True
-                else:
-                    # Fallback to model prediction if database search fails
-                    student_id = prediction["student_id"]
-                    full_name = prediction["full_name"]
-                    is_recognized = prediction["recognized"]
-                    
-                    # One last check: if model gave a label, try finding it by ID
-                    if is_recognized:
-                        student_doc = students_collection.find_one({"studentID": student_id})
-                        if student_doc:
-                            full_name = student_doc.get("fullName", full_name)
-
-                results.append({
-                    "bbox": face["bbox"],
-                    "student_id": student_id,
-                    "full_name": full_name,
-                    "emotion": prediction["emotion"],
-                    "pose": prediction["pose"],
-                    "recognized": is_recognized
-                })
+            # Pose
+            pose_result = predict_pose(face_crop)
+            
+            results.append({
+                "bbox": face["bbox"],
+                "student_id": recog_emotion["student_id"],
+                "full_name": recog_emotion["full_name"],
+                "emotion": recog_emotion["emotion"],
+                "pose": pose_result["pose"],
+                "recognized": recog_emotion["recognized"]
+            })
 
         present = [r["full_name"] for r in results if r["recognized"]]
 
