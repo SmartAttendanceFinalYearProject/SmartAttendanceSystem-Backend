@@ -10,7 +10,7 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 
-# ========================= CONFIG =========================
+# ========================= CONFIG =================================
 DATA_PATH = Path("dataset/raw_data/student_photos")
 
 MODEL_SAVE_PATH = "models/recog_emotion_model_1.pth"
