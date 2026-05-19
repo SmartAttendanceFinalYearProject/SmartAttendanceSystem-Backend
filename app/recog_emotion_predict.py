@@ -52,25 +52,11 @@ transform = transforms.Compose([
 EMOTION_CLASSES = ["neutral", "happy", "angry"]
 
 
-def predict_recog_emotion(image: Image.Image):
+def predict_recog_emotion(image: Image.Image, embedding=None):
     """Recognition (Database) + Emotion (Model)"""
     try:
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        faces = face_app.get(img_cv)
-
-        if not faces:
-            return {
-                "student_id": "Unknown",
-                "full_name": "Not registered as student",
-                "emotion": "neutral",
-                "recognized": False
-            }
-
-        best_face = max(faces, key=lambda f: f.det_score or 0)
-        aligned = best_face.aligned if hasattr(best_face, 'aligned') and best_face.aligned is not None else image
-
         # === Emotion ===
-        input_tensor = transform(aligned).unsqueeze(0).to(device)
+        input_tensor = transform(image).unsqueeze(0).to(device)
         with torch.no_grad():
             student_out, emotion_out = model(input_tensor)
 
@@ -78,14 +64,20 @@ def predict_recog_emotion(image: Image.Image):
         emotion = EMOTION_CLASSES[emotion_idx]
 
         # === Recognition (Reliable DB method) ===
-        embedding = best_face.normed_embedding
-        recog = recognize_student(embedding)
+        if embedding is not None:
+            recog = recognize_student(embedding)
+        else:
+            recog = {
+                "student_id": "Unknown",
+                "full_name": "Not registered as student",
+                "recognized": False
+            }
 
         return {
-            "student_id": recog["student_id"],
-            "full_name": recog["full_name"],
+            "student_id": recog.get("student_id", "Unknown"),
+            "full_name": recog.get("full_name", "Not registered as student"),
             "emotion": emotion,
-            "recognized": recog["recognized"]
+            "recognized": recog.get("recognized", False)
         }
 
     except Exception as e:

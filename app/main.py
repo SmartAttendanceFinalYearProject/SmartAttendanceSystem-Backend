@@ -308,7 +308,7 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
             face_crop = image.crop((x1, y1, x2, y2))
             
             # Recognition + Emotion
-            recog_emotion = predict_recog_emotion(face_crop)
+            recog_emotion = predict_recog_emotion(face_crop, embedding=face.get("embedding"))
             
             # Pose
             pose_result = predict_pose(face_crop)
