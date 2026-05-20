@@ -13,7 +13,7 @@ from tqdm import tqdm
 # ========================= CONFIG =================================
 DATA_PATH = Path("dataset/raw_data/student_photos")
 
-MODEL_SAVE_PATH = "models/recog_emotion_model_1.pth"
+MODEL_SAVE_PATH = "models/recog_emotion_model_2.pth"
 
 BATCH_SIZE = 8
 NUM_EPOCHS = 15
