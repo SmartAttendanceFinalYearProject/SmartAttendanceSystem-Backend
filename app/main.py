@@ -309,8 +309,8 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
             }
 
         results = []
-        # Get pose for the whole image once
-        pose_result = predict_pose(image)
+        image_width = image.width
+        image_height = image.height
 
         for face in faces:
             # Crop only for recognition + emotion
@@ -319,6 +319,9 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
             
             # Recognition + Emotion, passing the pre-computed embedding
             recog_emotion = predict_recog_emotion(face_crop, embedding=face.get("embedding"))
+            
+            # Pose - Use full image context with the face dictionary
+            pose_result = predict_pose(face, image_width, image_height)
             
             results.append({
                 "bbox": face["bbox"],
