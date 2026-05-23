@@ -11,7 +11,7 @@ import insightface
 from .recognizer import recognize_student
 
 # ========================= CONFIG =========================
-MODEL_PATH = Path("models/recog_emotion_model.pth")
+MODEL_PATH = Path("models/recog_emotion_model_final.pth")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
