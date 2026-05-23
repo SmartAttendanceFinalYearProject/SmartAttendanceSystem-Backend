@@ -297,25 +297,28 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         
+        # Get faces with InsightFace (full context)
         faces = detect_faces_for_attendance(image)
         
         if not faces:
-            return {"status": "success", "message": "No faces detected", "results": []}
+            return {
+                "status": "success", 
+                "message": "No faces detected", 
+                "total_faces_detected": 0,
+                "results": []
+            }
 
         results = []
-        image_width = image.width
-        image_height = image.height
+        # Get pose for the whole image once
+        pose_result = predict_pose(image)
 
         for face in faces:
-            # Crop for recognition + emotion
+            # Crop only for recognition + emotion
             x1, y1, x2, y2 = face["bbox"]
             face_crop = image.crop((x1, y1, x2, y2))
             
-            # Recognition + Emotion
-            recog_emotion = predict_recog_emotion(face_crop)
-            
-            # Pose - Use full image context (this was the key fix)
-            pose_result = predict_pose(face, image_width, image_height)
+            # Recognition + Emotion, passing the pre-computed embedding
+            recog_emotion = predict_recog_emotion(face_crop, embedding=face.get("embedding"))
             
             results.append({
                 "bbox": face["bbox"],
