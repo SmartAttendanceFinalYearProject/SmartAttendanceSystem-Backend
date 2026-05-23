@@ -303,15 +303,19 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
             return {"status": "success", "message": "No faces detected", "results": []}
 
         results = []
+        image_width = image.width
+        image_height = image.height
+
         for face in faces:
+            # Crop for recognition + emotion
             x1, y1, x2, y2 = face["bbox"]
             face_crop = image.crop((x1, y1, x2, y2))
             
             # Recognition + Emotion
-            recog_emotion = predict_recog_emotion(face_crop, embedding=face.get("embedding"))
+            recog_emotion = predict_recog_emotion(face_crop)
             
-            # Pose
-            pose_result = predict_pose(face_crop)
+            # Pose - Use full image context (this was the key fix)
+            pose_result = predict_pose(face, image_width, image_height)
             
             results.append({
                 "bbox": face["bbox"],
@@ -319,7 +323,8 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
                 "full_name": recog_emotion["full_name"],
                 "emotion": recog_emotion["emotion"],
                 "pose": pose_result["pose"],
-                "recognized": recog_emotion["recognized"]
+                "recognized": recog_emotion["recognized"],
+                "pose_confidence": pose_result.get("pose_confidence", 60.0)
             })
 
         present = [r["full_name"] for r in results if r["recognized"]]

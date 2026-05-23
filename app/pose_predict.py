@@ -1,35 +1,31 @@
-from ultralytics import YOLO
-import cv2
 import numpy as np
-from PIL import Image
+from typing import Dict, Any
 
-pose_model = YOLO("yolov8s-pose.pt")
-print("✅ YOLOv8 Pose Model Loaded Successfully!")
-
-
-def predict_pose(image: Image.Image):
-    """Standing / Sitting using YOLOv8 Pose"""
+def predict_pose(face: Dict[str, Any], image_width: int, image_height: int) -> Dict[str, Any]:
+    """
+    Reliable rule-based sitting vs standing using face vertical position
+    """
     try:
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        bbox = face["bbox"]
+        x1, y1, x2, y2 = bbox
+        face_center_y = (y1 + y2) / 2
         
-        results = pose_model(img_cv, conf=0.25, verbose=False)
-
-        if not results or len(results[0].keypoints) == 0:
-            return {"pose": "standing", "pose_confidence": 60.0}
-
-        kpts = results[0].keypoints.data[0]
-
-        left_ankle_y = float(kpts[15][1])
-        right_ankle_y = float(kpts[16][1])
-        avg_ankle_y = (left_ankle_y + right_ankle_y) / 2
-        image_height = img_cv.shape[0]
-
-        # Adjusted threshold
-        if avg_ankle_y > image_height * 0.72:
-            return {"pose": "sitting", "pose_confidence": 80.0}
+        # Adjusted threshold - people sitting/crouching have faces lower in the frame
+        if face_center_y > image_height * 0.62:   
+            pose_label = "sitting"
+            confidence = 78.0
         else:
-            return {"pose": "standing", "pose_confidence": 80.0}
+            pose_label = "standing"
+            confidence = 82.0
+        
+        return {
+            "pose": pose_label,
+            "pose_confidence": confidence
+        }
 
     except Exception as e:
-        print(f"Pose error: {e}")
-        return {"pose": "standing", "pose_confidence": 50.0}
+        print(f"Pose prediction error: {e}")
+        return {
+            "pose": "standing",
+            "pose_confidence": 50.0
+        }
