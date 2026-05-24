@@ -231,7 +231,7 @@ async def register_student(
     - image file (must contain one clear face)
     """
     try:
-        # Validate email format if provided
+        # Validate the email format if provided
         if email:
             import re
             email_regex = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
