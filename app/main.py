@@ -1,11 +1,14 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Response
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import base64
+import json
 from io import BytesIO
 from PIL import Image
-import io   
+import io
+import cv2
+import asyncio
 import numpy as np
 import logging
 import torch
@@ -231,7 +234,7 @@ async def register_student(
     - image file (must contain one clear face)
     """
     try:
-        # Validate email format if provided
+        # Validate the email format if provided
         if email:
             import re
             email_regex = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
@@ -1163,6 +1166,120 @@ async def get_analytics_stats(current_user: TokenData = Depends(get_current_user
         "departments": departments,
         "totalStudentsRaw": total_students
     }
+
+
+# ====================== LIVE ATTENDANCE (WebSocket + cv2.VideoCapture) ======================
+
+@app.websocket("/attendance/live")
+async def live_attendance(websocket: WebSocket):
+    """
+    Live attendance via client-sent frames.
+    - The browser captures frames via react-webcam and sends them as base64 JPEG
+      in a JSON message: { "image": "data:image/jpeg;base64,..." }
+    - This endpoint decodes each frame, runs InsightFace + emotion + pose,
+      and streams JSON recognition results back to the client.
+    - No server-side camera is required.
+    """
+    await websocket.accept()
+    logger.info("🎥 Live attendance WebSocket connected")
+
+    # Send a ready signal so the frontend knows it can start sending frames
+    await websocket.send_json({"status": "ready", "message": "Send frames as base64 JPEG"})
+
+    try:
+        while True:
+            # ── Wait for a frame from the browser ────────
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # No frame received in 30 s – send a heartbeat and keep waiting
+                await websocket.send_json({"status": "waiting"})
+                continue
+
+            # ── Decode the incoming JSON ──────────────────
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                await websocket.send_json({"status": "error", "message": "Invalid JSON"})
+                continue
+
+            image_b64 = msg.get("image", "")
+            if not image_b64:
+                await websocket.send_json({"status": "error", "message": "No image field in message"})
+                continue
+
+            # ── Decode base64 → PIL Image ─────────────────
+            try:
+                if "," in image_b64:
+                    image_b64 = image_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(image_b64)
+                pil_image = Image.open(BytesIO(img_bytes)).convert("RGB")
+            except Exception as decode_err:
+                logger.warning(f"Frame decode error: {decode_err}")
+                await websocket.send_json({"status": "error", "message": "Invalid image data"})
+                continue
+
+            # ── Face detection ────────────────────────────
+            try:
+                faces = detect_faces_for_attendance(pil_image)
+            except Exception as det_err:
+                logger.error(f"Detection error: {det_err}")
+                faces = []
+
+            results = []
+            image_width = pil_image.width
+            image_height = pil_image.height
+
+            for face in faces:
+                try:
+                    x1, y1, x2, y2 = face["bbox"]
+                    face_crop = pil_image.crop((x1, y1, x2, y2))
+
+                    # Recognition + Emotion
+                    recog_emotion = predict_recog_emotion(
+                        face_crop, embedding=face.get("embedding")
+                    )
+
+                    # Pose
+                    pose_result = predict_pose(face, image_width, image_height)
+
+                    results.append({
+                        "bbox": face["bbox"],
+                        "student_id": recog_emotion["student_id"],
+                        "full_name": recog_emotion["full_name"],
+                        "emotion": recog_emotion["emotion"],
+                        "pose": pose_result["pose"],
+                        "recognized": recog_emotion["recognized"],
+                        "pose_confidence": pose_result.get("pose_confidence", 60.0)
+                    })
+                except Exception as face_err:
+                    logger.warning(f"Face processing error: {face_err}")
+                    continue
+
+            # ── Send results ──────────────────────────────
+            present = [r["full_name"] for r in results if r["recognized"]]
+            payload = {
+                "status": "success",
+                "total_faces_detected": len(faces),
+                "recognized_count": len(present),
+                "results": results,
+                "present_list": present
+            }
+
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                # Client disconnected during send
+                break
+
+    except WebSocketDisconnect:
+        logger.info("🔌 Live attendance client disconnected")
+    except Exception as e:
+        logger.error(f"Live attendance error: {e}", exc_info=True)
+        try:
+            await websocket.send_json({"status": "error", "message": str(e)})
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
