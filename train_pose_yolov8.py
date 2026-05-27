@@ -14,7 +14,7 @@ if not os.path.exists(DATASET_YAML):
     raise FileNotFoundError(f"data.yaml not found at: {DATASET_YAML}")
 
 # ========================= TRAIN YOLOv8 POSE =========================
-model = YOLO("yolov8s-pose.pt")   
+model = YOLO("yolov8s-pose.pt")   # Best balance for pose
 
 print("🚀 Starting YOLOv8 Pose Training...")
 
@@ -22,7 +22,7 @@ results = model.train(
     data=DATASET_YAML,
     epochs=100,
     imgsz=640,
-    batch=8,                    
+    batch=8,                    # Reduce to 4 if you get CUDA OOM
     name=PROJECT_NAME,
     patience=20,
     save=True,
