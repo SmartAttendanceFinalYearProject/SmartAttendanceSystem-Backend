@@ -962,7 +962,8 @@ async def get_all_students(current_user: TokenData = Depends(get_current_user)):
             "class_year": s.get("class_year", ""),
             "semester": s.get("semester", ""),
             "section": s.get("section", ""),
-            "department": s.get("department", "")
+            "department": s.get("department", ""),
+            "email": s.get("email", "")
         })
     return students
 
@@ -1314,161 +1315,81 @@ async def get_student_details(student_id: str, current_user: TokenData = Depends
     except Exception as e:
         logger.error(f"Student details error: {e}")
         raise HTTPException(500, str(e))
-# ====================== ADMIN: STUDENT DETAILS & HISTORY ======================
-class StudentAttendanceHistory(BaseModel):
-    class_id: str
-    class_name: str
-    subject_name: str
-    subject_code: str
-    session_date: datetime
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    status: str
-    emotion: Optional[str] = None
-    pose: Optional[str] = None
-    timestamp: datetime
 
+# ====================== STUDENT UPDATE ======================
 
-class StudentDetailResponse(BaseModel):
-    id: str
-    fullName: str
-    studentID: str
-    department: Optional[str]
-    section: Optional[str]
-    email: Optional[str]
-    batch: str
-    class_year: str
-    semester: str
-    registrationDate: datetime
-    faceEmbeddingExists: bool = False
-    totalClasses: int = 0
-    totalAttendanceSessions: int = 0
-    attendanceHistory: List[StudentAttendanceHistory] = []
-    presentCount: int = 0
-    absentCount: int = 0
-    overallAttendanceRate: float = 0.0
-    
-# ====================== STUDENT DETAILS & HISTORY ======================
+class StudentUpdate(BaseModel):
+    fullName: Optional[str] = None
+    department: Optional[str] = None
+    section: Optional[str] = None
+    email: Optional[str] = None
+    batch: Optional[str] = None
+    class_year: Optional[str] = None
+    semester: Optional[str] = None
+# ====================== ADMIN: EDIT / DELETE STUDENT ======================
 
-class StudentAttendanceHistory(BaseModel):
-    class_id: str
-    class_name: str
-    subject_name: str
-    subject_code: str
-    session_date: datetime
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    status: str
-    emotion: Optional[str] = None
-    pose: Optional[str] = None
-    timestamp: datetime
-
-
-class StudentDetailResponse(BaseModel):
-    id: str
-    fullName: str
-    studentID: str
-    department: Optional[str]
-    section: Optional[str]
-    email: Optional[str]
-    batch: str
-    class_year: str
-    semester: str
-    registrationDate: datetime
-    faceEmbeddingExists: bool = False
-    totalClasses: int = 0
-    totalAttendanceSessions: int = 0
-    attendanceHistory: List[StudentAttendanceHistory] = []
-    presentCount: int = 0
-    absentCount: int = 0
-    overallAttendanceRate: float = 0.0
-    
-# ====================== ADMIN: STUDENT DETAILS & HISTORY ======================
-
-@app.get("/admin/students/{student_id}/details", response_model=StudentDetailResponse)
-async def get_student_details(
+@app.put("/admin/students/{student_id}", response_model=StudentOut)
+async def update_student(
     student_id: str,
+    student_data: StudentUpdate,
     current_user: TokenData = Depends(get_current_user)
 ):
-    """
-    Get comprehensive student details + full attendance history.
-    Used when Admin clicks "View Details & History" button.
-    """
     if current_user.role != "admin":
-        raise HTTPException(403, detail="Only admin can view student details")
+        raise HTTPException(403, detail="Only admin can edit students")
 
-    # Find student by studentID
     student_doc = students_collection.find_one({"studentID": student_id})
     if not student_doc:
         raise HTTPException(404, f"Student with ID {student_id} not found")
 
-    student_id_str = str(student_doc["_id"])
+    update_data = {k: v for k, v in student_data.dict(exclude_unset=True).items() if v is not None}
+    if not update_data:
+        raise HTTPException(400, "No update data provided")
 
-    response = StudentDetailResponse(
-        id=student_id_str,
-        fullName=student_doc.get("fullName", ""),
-        studentID=student_doc.get("studentID", ""),
-        department=student_doc.get("department"),
-        section=student_doc.get("section"),
-        email=student_doc.get("email"),
-        batch=student_doc.get("batch", ""),
-        class_year=student_doc.get("class_year", ""),
-        semester=student_doc.get("semester", ""),
-        registrationDate=student_doc.get("registrationDate", datetime.utcnow()),
-        faceEmbeddingExists=bool(student_doc.get("faceEmbedding"))
+    if "email" in update_data and update_data["email"]:
+        import re
+        if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', update_data["email"]):
+            raise HTTPException(400, "Invalid email format")
+
+    updated_student = students_collection.find_one_and_update(
+        {"_id": student_doc["_id"]},
+        {"$set": update_data},
+        return_document=True
     )
 
-    # Collect full attendance history
-    attendance_history = []
-    present_count = 0
-    absent_count = 0
+    if not updated_student:
+        raise HTTPException(500, "Failed to update student")
 
-    for cls in classes_collection.find({"students": student_id}):
-        class_name = cls.get("class_name", "Unknown Class")
-        subject_name = cls.get("subject_name", "")
-        subject_code = cls.get("subject_code", "")
-
-        for session in cls.get("attendance_sessions", []):
-            for record in session.get("records", []):
-                if record.get("student_id") == student_id:
-                    history_entry = StudentAttendanceHistory(
-                        class_id=str(cls["_id"]),
-                        class_name=class_name,
-                        subject_name=subject_name,
-                        subject_code=subject_code,
-                        session_date=session.get("session_date"),
-                        start_time=session.get("start_time"),
-                        end_time=session.get("end_time"),
-                        status=record.get("status", "absent"),
-                        emotion=record.get("emotion"),
-                        pose=record.get("pose"),
-                        timestamp=record.get("timestamp", datetime.utcnow())
-                    )
-                    attendance_history.append(history_entry)
-
-                    if record.get("status") == "present":
-                        present_count += 1
-                    else:
-                        absent_count += 1
-
-    response.attendanceHistory = sorted(
-        attendance_history, 
-        key=lambda x: x.session_date if x.session_date else datetime.min, 
-        reverse=True
+    return StudentOut(
+        id=str(updated_student["_id"]),
+        fullName=updated_student["fullName"],
+        studentID=updated_student["studentID"],
+        department=updated_student.get("department"),
+        section=updated_student.get("section"),
+        email=updated_student.get("email"),
+        batch=updated_student.get("batch", ""),
+        class_year=updated_student.get("class_year", ""),
+        semester=updated_student.get("semester", ""),
+        registrationDate=updated_student.get("registrationDate")
     )
-    response.totalClasses = len({h.class_id for h in attendance_history})
-    response.totalAttendanceSessions = len(attendance_history)
-    response.presentCount = present_count
-    response.absentCount = absent_count
-    
-    if response.totalAttendanceSessions > 0:
-        response.overallAttendanceRate = round((present_count / response.totalAttendanceSessions) * 100, 2)
-    else:
-        response.overallAttendanceRate = 0.0
 
-    return response
 
-# ====================== LIVE ATTENDANCE (WebSocket + cv2.VideoCapture) ======================
+@app.delete("/admin/students/{student_id}", status_code=204)
+async def delete_student(
+    student_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can delete students")
+
+    student_doc = students_collection.find_one({"studentID": student_id})
+    if not student_doc:
+        raise HTTPException(404, f"Student with ID {student_id} not found")
+
+    result = students_collection.delete_one({"_id": student_doc["_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Student not found")
+
+    return Response(status_code=204)# ====================== LIVE ATTENDANCE (WebSocket + cv2.VideoCapture) ======================
 
 # WebSocket endpoint for live attendance frames streamed from the browser. It returns recognition results in real time.
 @app.websocket("/attendance/live")
