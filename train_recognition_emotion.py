@@ -55,7 +55,7 @@ class RecogEmotionDataset(Dataset):
 
                     for img_path in student_folder.rglob("*.*"):
                         if img_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}: continue
-                        self.samples.append((img_path, s_id, 0))   # dummy emotion
+                        self.samples.append((img_path, s_id, 0))  
 
             self.num_students = len(student_to_id)
         else:

@@ -12,7 +12,7 @@ def predict_pose(face: Dict[str, Any], image_width: int, image_height: int) -> D
         face_center_y = (y1 + y2) / 2
         
         # Adjusted threshold - people sitting/crouching have faces lower in the frame
-        if face_center_y > image_height * 0.62:   
+        if face_center_y > image_height * 0.62:
             pose_label = "sitting"
             confidence = 78.0
         else:
