@@ -1314,6 +1314,159 @@ async def get_student_details(student_id: str, current_user: TokenData = Depends
     except Exception as e:
         logger.error(f"Student details error: {e}")
         raise HTTPException(500, str(e))
+# ====================== ADMIN: STUDENT DETAILS & HISTORY ======================
+class StudentAttendanceHistory(BaseModel):
+    class_id: str
+    class_name: str
+    subject_name: str
+    subject_code: str
+    session_date: datetime
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    status: str
+    emotion: Optional[str] = None
+    pose: Optional[str] = None
+    timestamp: datetime
+
+
+class StudentDetailResponse(BaseModel):
+    id: str
+    fullName: str
+    studentID: str
+    department: Optional[str]
+    section: Optional[str]
+    email: Optional[str]
+    batch: str
+    class_year: str
+    semester: str
+    registrationDate: datetime
+    faceEmbeddingExists: bool = False
+    totalClasses: int = 0
+    totalAttendanceSessions: int = 0
+    attendanceHistory: List[StudentAttendanceHistory] = []
+    presentCount: int = 0
+    absentCount: int = 0
+    overallAttendanceRate: float = 0.0
+    
+# ====================== STUDENT DETAILS & HISTORY ======================
+
+class StudentAttendanceHistory(BaseModel):
+    class_id: str
+    class_name: str
+    subject_name: str
+    subject_code: str
+    session_date: datetime
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    status: str
+    emotion: Optional[str] = None
+    pose: Optional[str] = None
+    timestamp: datetime
+
+
+class StudentDetailResponse(BaseModel):
+    id: str
+    fullName: str
+    studentID: str
+    department: Optional[str]
+    section: Optional[str]
+    email: Optional[str]
+    batch: str
+    class_year: str
+    semester: str
+    registrationDate: datetime
+    faceEmbeddingExists: bool = False
+    totalClasses: int = 0
+    totalAttendanceSessions: int = 0
+    attendanceHistory: List[StudentAttendanceHistory] = []
+    presentCount: int = 0
+    absentCount: int = 0
+    overallAttendanceRate: float = 0.0
+    
+# ====================== ADMIN: STUDENT DETAILS & HISTORY ======================
+
+@app.get("/admin/students/{student_id}/details", response_model=StudentDetailResponse)
+async def get_student_details(
+    student_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Get comprehensive student details + full attendance history.
+    Used when Admin clicks "View Details & History" button.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can view student details")
+
+    # Find student by studentID
+    student_doc = students_collection.find_one({"studentID": student_id})
+    if not student_doc:
+        raise HTTPException(404, f"Student with ID {student_id} not found")
+
+    student_id_str = str(student_doc["_id"])
+
+    response = StudentDetailResponse(
+        id=student_id_str,
+        fullName=student_doc.get("fullName", ""),
+        studentID=student_doc.get("studentID", ""),
+        department=student_doc.get("department"),
+        section=student_doc.get("section"),
+        email=student_doc.get("email"),
+        batch=student_doc.get("batch", ""),
+        class_year=student_doc.get("class_year", ""),
+        semester=student_doc.get("semester", ""),
+        registrationDate=student_doc.get("registrationDate", datetime.utcnow()),
+        faceEmbeddingExists=bool(student_doc.get("faceEmbedding"))
+    )
+
+    # Collect full attendance history
+    attendance_history = []
+    present_count = 0
+    absent_count = 0
+
+    for cls in classes_collection.find({"students": student_id}):
+        class_name = cls.get("class_name", "Unknown Class")
+        subject_name = cls.get("subject_name", "")
+        subject_code = cls.get("subject_code", "")
+
+        for session in cls.get("attendance_sessions", []):
+            for record in session.get("records", []):
+                if record.get("student_id") == student_id:
+                    history_entry = StudentAttendanceHistory(
+                        class_id=str(cls["_id"]),
+                        class_name=class_name,
+                        subject_name=subject_name,
+                        subject_code=subject_code,
+                        session_date=session.get("session_date"),
+                        start_time=session.get("start_time"),
+                        end_time=session.get("end_time"),
+                        status=record.get("status", "absent"),
+                        emotion=record.get("emotion"),
+                        pose=record.get("pose"),
+                        timestamp=record.get("timestamp", datetime.utcnow())
+                    )
+                    attendance_history.append(history_entry)
+
+                    if record.get("status") == "present":
+                        present_count += 1
+                    else:
+                        absent_count += 1
+
+    response.attendanceHistory = sorted(
+        attendance_history, 
+        key=lambda x: x.session_date if x.session_date else datetime.min, 
+        reverse=True
+    )
+    response.totalClasses = len({h.class_id for h in attendance_history})
+    response.totalAttendanceSessions = len(attendance_history)
+    response.presentCount = present_count
+    response.absentCount = absent_count
+    
+    if response.totalAttendanceSessions > 0:
+        response.overallAttendanceRate = round((present_count / response.totalAttendanceSessions) * 100, 2)
+    else:
+        response.overallAttendanceRate = 0.0
+
+    return response
 
 # ====================== LIVE ATTENDANCE (WebSocket + cv2.VideoCapture) ======================
 
