@@ -1,36 +1,11 @@
 import torch
 import numpy as np
-import time
 from pathlib import Path
 from typing import List, Dict
 from .database import students_collection
 
 # ========================= CONFIG =========================
 SIMILARITY_THRESHOLD = 0.40   # Adjust between 0.35 - 0.50 (higher = stricter)
-
-# Simple in-memory cache for registered students
-_students_cache = None
-_cache_expiry = 0.0
-CACHE_TTL = 5.0  # seconds
-
-def _get_registered_students() -> List[Dict]:
-    global _students_cache, _cache_expiry
-    now = time.time()
-    if _students_cache is None or now > _cache_expiry:
-        try:
-            _students_cache = list(students_collection.find({}, {
-                "fullName": 1,
-                "studentID": 1,
-                "faceEmbedding": 1
-            }))
-            _cache_expiry = now + CACHE_TTL
-        except Exception as e:
-            print(f"Error fetching students for cache: {e}")
-            if _students_cache is not None:
-                return _students_cache  # fallback to stale cache on DB error
-            return []
-    return _students_cache
-
 
 def cosine_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
     """Calculate cosine similarity between two embeddings"""
@@ -46,8 +21,12 @@ def recognize_student(embedding: np.ndarray) -> Dict[str, any]:
     try:
         embedding = np.array(embedding, dtype=np.float32).flatten()
         
-        # Get registered students (using cache to improve performance)
-        students = _get_registered_students()
+        # Get all registered students with embeddings
+        students = list(students_collection.find({}, {
+            "fullName": 1,
+            "studentID": 1,
+            "faceEmbedding": 1
+        }))
 
         best_match = None
         best_score = -1.0

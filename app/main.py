@@ -22,6 +22,11 @@ from .models import StudentCreate, StudentOut, StudentMinimal, FaceBox, Detectio
 from .database import students_collection , teachers_collection, subjects_collection, classes_collection
 from .face_utils import extract_face_embedding, detect_faces_for_attendance
 
+# This module is the FastAPI application entrypoint for the Smart Attendance backend.
+# It initializes the face detection model, connects to MongoDB collections,
+# and exposes endpoints for detection, registration, attendance, authentication,
+# teacher/admin management, and live streaming via WebSocket.
+
 # ── YOLO imports (only when needed) ───────────────────────
 from ultralytics import YOLO
 from ultralytics.nn.tasks import DetectionModel
@@ -58,7 +63,8 @@ app.add_middleware(
 )
 
 # ── Global YOLO Detector ──────────────────────────────────
-
+# This class encapsulates YOLO face detection so the model is loaded once
+# and reused for every incoming request.
 class YOLOFaceDetector:
     def __init__(self, model_name: str = "yolov8n.pt"):
         self.model = None
@@ -138,6 +144,8 @@ except Exception as e:
 # ── Helpers ───────────────────────────────────────────────
 
 def decode_base64_image(image_base64: str) -> Image.Image:
+    # Convert a base64-encoded image string into a PIL RGB image.
+    # This supports both raw base64 content and data URLs like data:image/jpeg;base64,...
     try:
         if "," in image_base64:
             image_base64 = image_base64.split(",", 1)[1]
@@ -154,6 +162,7 @@ def decode_base64_image(image_base64: str) -> Image.Image:
 
 @app.get("/")
 async def root():
+    # Basic API root endpoint used to verify service status.
     status = "ready" if detector else "not_ready"
     return {
         "message": "Smart Attendance API",
@@ -185,6 +194,8 @@ async def health_check():
 
 @app.post("/detect", response_model=DetectionResponse)
 async def detect_faces(request: DetectionRequest):
+    # Detect faces in a posted base64 image and return bounding boxes.
+    # This endpoint does not do recognition, only face localization.
     if detector is None:
         raise HTTPException(500, "Face detector not initialized")
 
@@ -209,6 +220,7 @@ async def detect_faces(request: DetectionRequest):
         raise HTTPException(500, f"Detection failed: {str(e)}")
 
 
+# Endpoint to register a student by uploading a photo, extracting a face embedding, and saving profile data.
 @app.post("/register", response_model=StudentOut)
 async def register_student(
     fullName: str = Form(..., min_length=2),
@@ -294,8 +306,11 @@ async def register_student(
         logger.error(f"Registration failed: {e}", exc_info=True)
         raise HTTPException(500, f"Registration failed: {str(e)}")
 
+# Endpoint to recognize student attendance from a classroom image and return emotion and pose data.
 @app.post("/attendance/recognize")
 async def recognize_classroom_attendance(file: UploadFile = File(...)):
+    # Process a full classroom image, detect faces, recognize students, predict emotion,
+    # and estimate pose for each detected face.
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -350,6 +365,7 @@ async def recognize_classroom_attendance(file: UploadFile = File(...)):
         logger.error(f"Recognition error: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
+# Endpoint to finalize attendance records for a class session and save them to MongoDB.
 @app.post("/attendance/approve")
 async def approve_attendance(
     class_id: str = Form(...),
@@ -458,6 +474,7 @@ async def approve_attendance(
         return {"status": "error", "message": str(e)}
 
 
+# Endpoint for teachers to retrieve the classes assigned to the logged-in teacher.
 @app.get("/teacher/classes", response_model=List[ClassOut])
 async def get_teacher_classes(current_user: TokenData = Depends(get_current_user)):
     """
@@ -528,6 +545,7 @@ async def get_teacher_classes(current_user: TokenData = Depends(get_current_user
     return classes
 
 
+# Authentication endpoint for teacher/admin login that returns a JWT bearer token.
 @app.post("/login", response_model=Token)
 async def login(form_data: UserLogin):
     """
@@ -552,7 +570,7 @@ async def login(form_data: UserLogin):
         "full_name": user.get("full_name")
     }
 
-# Admin can create new teacher
+# Admin-only endpoint to create a new teacher account and store hashed password.
 @app.post("/admin/create-teacher")
 async def create_teacher(
     teacher: TeacherCreateByAdmin, 
@@ -576,6 +594,7 @@ async def create_teacher(
     result = teachers_collection.insert_one(teacher_doc)
     return {"message": "Teacher created successfully", "teacher_id": str(result.inserted_id)}
 
+# Admin endpoint to list all teachers in the system.
 @app.get("/admin/teachers", response_model=List[TeacherOut])
 async def get_all_teachers(current_user: TokenData = Depends(get_current_user)):
     if current_user.role != "admin":
@@ -593,6 +612,7 @@ async def get_all_teachers(current_user: TokenData = Depends(get_current_user)):
         )
     return teachers
 
+# Admin endpoint to update an existing teacher's details, including password if provided.
 @app.put("/admin/teachers/{teacher_id}", response_model=TeacherOut)
 async def update_teacher(
     teacher_id: str,
@@ -638,6 +658,7 @@ async def update_teacher(
         username=updated_teacher["username"]
     )
 
+# Admin endpoint to delete a teacher account from the database.
 @app.delete("/admin/teachers/{teacher_id}", status_code=204)
 async def delete_teacher(
     teacher_id: str,
@@ -657,6 +678,7 @@ async def delete_teacher(
 
     return Response(status_code=204)
 
+# Endpoint to list all subjects. Accessible to both admins and teachers.
 @app.get("/subjects", response_model=List[SubjectOut])
 async def get_all_subjects(current_user: TokenData = Depends(get_current_user)):
     """
@@ -677,6 +699,7 @@ async def get_all_subjects(current_user: TokenData = Depends(get_current_user)):
 
 # ====================== ADMIN: SUBJECT MANAGEMENT ==================
 
+# Admin endpoint to create a new subject record.
 @app.post("/admin/subjects", response_model=SubjectOut)
 async def create_subject(
     subject_data: SubjectCreate,
@@ -706,6 +729,7 @@ async def create_subject(
     )
 
 
+# Admin endpoint to update subject name or code.
 @app.put("/admin/subjects/{subject_id}", response_model=SubjectOut)
 async def update_subject(
     subject_id: str,
@@ -752,6 +776,7 @@ async def update_subject(
     )
 
 
+# Admin endpoint to delete a subject from the catalog.
 @app.delete("/admin/subjects/{subject_id}", status_code=204)
 async def delete_subject(
     subject_id: str,
@@ -778,6 +803,7 @@ async def delete_subject(
 
 # ====================== ADMIN: CLASS MANAGEMENT ======================
 
+# Admin endpoint to create a class, assign it to a teacher, and attach students.
 @app.post("/admin/classes", response_model=ClassOut)
 async def create_class(
     class_data: ClassCreate,
@@ -832,6 +858,7 @@ async def create_class(
         students=class_doc["students"]
     )
 
+# Admin endpoint to update class details, teacher assignment, or subject association.
 @app.put("/admin/classes/{class_id}", response_model=ClassOut)
 async def update_class(
     class_id: str,
@@ -889,6 +916,7 @@ async def update_class(
         students=updated_class.get("students", [])
     )
 
+# Admin endpoint to delete a class and all its schedule/attendance metadata.
 @app.delete("/admin/classes/{class_id}", status_code=204)
 async def delete_class(
     class_id: str,
@@ -914,6 +942,7 @@ async def delete_class(
 
 # ====================== ADMIN: STUDENT LIST ======================
 
+# Admin endpoint to list all registered students in a lightweight format.
 @app.get("/admin/students")
 async def get_all_students(current_user: TokenData = Depends(get_current_user)):
     """
@@ -933,13 +962,15 @@ async def get_all_students(current_user: TokenData = Depends(get_current_user)):
             "class_year": s.get("class_year", ""),
             "semester": s.get("semester", ""),
             "section": s.get("section", ""),
-            "department": s.get("department", "")
+            "department": s.get("department", ""),
+            "email": s.get("email", "")
         })
     return students
 
 
 # ====================== GENERAL CLASS ENDPOINTS ======================
 
+# Endpoint for admin or teacher to list all classes with schedules, student details, and attendance sessions.
 @app.get("/classes", response_model=List[ClassOut])
 async def get_all_classes(current_user: TokenData = Depends(get_current_user)):
     """
@@ -999,6 +1030,7 @@ async def get_all_classes(current_user: TokenData = Depends(get_current_user)):
             continue
     return classes
 
+# Endpoint for admin or teacher to retrieve a single class by ID, including its students and attendance sessions.
 @app.get("/classes/{class_id}", response_model=ClassOut)
 async def get_class(class_id: str, current_user: TokenData = Depends(get_current_user)):
     """
@@ -1064,6 +1096,7 @@ async def get_class(class_id: str, current_user: TokenData = Depends(get_current
         attendance_sessions=sessions
     )
 
+# Admin dashboard endpoint that computes school analytics such as average attendance and department breakdowns.
 @app.get("/admin/analytics/stats")
 async def get_analytics_stats(current_user: TokenData = Depends(get_current_user)):
     """
@@ -1166,10 +1199,199 @@ async def get_analytics_stats(current_user: TokenData = Depends(get_current_user
         "departments": departments,
         "totalStudentsRaw": total_students
     }
+    
+# ====================== ADMIN: STUDENT PERFORMANCE ======================
+
+@app.get("/admin/students/performance")
+async def get_students_performance(current_user: TokenData = Depends(get_current_user)):
+    """
+    Get detailed attendance performance for all students (Admin only)
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can access student performance")
+
+    students_perf = []
+
+    for student_doc in students_collection.find():
+        student_id = student_doc["studentID"]
+        full_name = student_doc["fullName"]
+
+        total_present = 0
+        total_sessions = 0
+        class_performances = []
+
+        # Find all classes this student is enrolled in
+        for cls in classes_collection.find({"students": student_id}):
+            class_name = cls.get("class_name")
+            subject_name = cls.get("subject_name", "Unknown")
+
+            present_count = 0
+            session_count = 0
+
+            for session in cls.get("attendance_sessions", []):
+                session_count += 1
+                for record in session.get("records", []):
+                    if record.get("student_id") == student_id and record.get("status") == "present":
+                        present_count += 1
+                        total_present += 1
+
+            total_sessions += session_count
+            if session_count > 0:
+                rate = (present_count / session_count) * 100
+                class_performances.append({
+                    "class_id": str(cls["_id"]),
+                    "class_name": class_name,
+                    "subject_name": subject_name,
+                    "attendance_rate": round(rate, 1),
+                    "total_sessions": session_count,
+                    "present_count": present_count
+                })
+
+        overall_rate = (total_present / total_sessions * 100) if total_sessions > 0 else 0
+
+        students_perf.append({
+            "student_id": str(student_doc["_id"]),
+            "full_name": full_name,
+            "studentID": student_id,
+            "department": student_doc.get("department"),
+            "batch": student_doc.get("batch"),
+            "class_year": student_doc.get("class_year"),
+            "semester": student_doc.get("semester"),
+            "overall_attendance": round(overall_rate, 1),
+            "total_sessions": total_sessions,
+            "classes": class_performances
+        })
+
+    # Sort by overall attendance descending
+    students_perf.sort(key=lambda x: x["overall_attendance"], reverse=True)
+    return students_perf
 
 
-# ====================== LIVE ATTENDANCE (WebSocket + cv2.VideoCapture) ======================
+@app.get("/admin/students/{student_id}/details")
+async def get_student_details(student_id: str, current_user: TokenData = Depends(get_current_user)):
+    """
+    Get detailed info for a specific student including full attendance history
+    """
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can access this")
 
+    try:
+        # Find student
+        student = students_collection.find_one({"studentID": student_id})
+        if not student:
+            raise HTTPException(404, "Student not found")
+
+        # Get all attendance records across classes
+        attendance_history = []
+
+        for cls in classes_collection.find({"students": student_id}):
+            for session in cls.get("attendance_sessions", []):
+                for record in session.get("records", []):
+                    if record.get("student_id") == student_id:
+                        attendance_history.append({
+                            "class_name": cls.get("class_name"),
+                            "subject_name": cls.get("subject_name"),
+                            "session_date": session.get("session_date"),
+                            "status": record.get("status"),
+                            "emotion": record.get("emotion"),
+                            "pose": record.get("pose")
+                        })
+
+        return {
+            "student": {
+                "id": str(student["_id"]),
+                "fullName": student["fullName"],
+                "studentID": student["studentID"],
+                "department": student.get("department"),
+                "batch": student.get("batch"),
+                "class_year": student.get("class_year"),
+                "semester": student.get("semester"),
+                "registrationDate": student.get("registrationDate")
+            },
+            "attendance_history": sorted(attendance_history, key=lambda x: x["session_date"], reverse=True),
+            "total_records": len(attendance_history)
+        }
+
+    except Exception as e:
+        logger.error(f"Student details error: {e}")
+        raise HTTPException(500, str(e))
+
+# ====================== STUDENT UPDATE ======================
+
+class StudentUpdate(BaseModel):
+    fullName: Optional[str] = None
+    department: Optional[str] = None
+    section: Optional[str] = None
+    email: Optional[str] = None
+    batch: Optional[str] = None
+    class_year: Optional[str] = None
+    semester: Optional[str] = None
+# ====================== ADMIN: EDIT / DELETE STUDENT ======================
+
+@app.put("/admin/students/{student_id}", response_model=StudentOut)
+async def update_student(
+    student_id: str,
+    student_data: StudentUpdate,
+    current_user: TokenData = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can edit students")
+
+    student_doc = students_collection.find_one({"studentID": student_id})
+    if not student_doc:
+        raise HTTPException(404, f"Student with ID {student_id} not found")
+
+    update_data = {k: v for k, v in student_data.dict(exclude_unset=True).items() if v is not None}
+    if not update_data:
+        raise HTTPException(400, "No update data provided")
+
+    if "email" in update_data and update_data["email"]:
+        import re
+        if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', update_data["email"]):
+            raise HTTPException(400, "Invalid email format")
+
+    updated_student = students_collection.find_one_and_update(
+        {"_id": student_doc["_id"]},
+        {"$set": update_data},
+        return_document=True
+    )
+
+    if not updated_student:
+        raise HTTPException(500, "Failed to update student")
+
+    return StudentOut(
+        id=str(updated_student["_id"]),
+        fullName=updated_student["fullName"],
+        studentID=updated_student["studentID"],
+        department=updated_student.get("department"),
+        section=updated_student.get("section"),
+        email=updated_student.get("email"),
+        batch=updated_student.get("batch", ""),
+        class_year=updated_student.get("class_year", ""),
+        semester=updated_student.get("semester", ""),
+        registrationDate=updated_student.get("registrationDate")
+    )
+
+
+@app.delete("/admin/students/{student_id}", status_code=204)
+async def delete_student(
+    student_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(403, detail="Only admin can delete students")
+
+    student_doc = students_collection.find_one({"studentID": student_id})
+    if not student_doc:
+        raise HTTPException(404, f"Student with ID {student_id} not found")
+
+    result = students_collection.delete_one({"_id": student_doc["_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Student not found")
+
+    return Response(status_code=204)# ====================== LIVE ATTENDANCE (WebSocket + cv2.VideoCapture) ======================
+
+# WebSocket endpoint for live attendance frames streamed from the browser. It returns recognition results in real time.
 @app.websocket("/attendance/live")
 async def live_attendance(websocket: WebSocket):
     """
