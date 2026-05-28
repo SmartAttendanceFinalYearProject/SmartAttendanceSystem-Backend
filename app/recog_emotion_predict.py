@@ -63,7 +63,7 @@ def predict_recog_emotion(image: Image.Image, embedding=None):
         emotion_idx = emotion_out.argmax(1).item()
         emotion = EMOTION_CLASSES[emotion_idx]
 
-        # === Recognition (Reliable DB method) ===
+        # === Recognition 
         if embedding is not None:
             recog = recognize_student(embedding)
         else:

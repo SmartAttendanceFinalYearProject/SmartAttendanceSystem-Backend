@@ -234,19 +234,10 @@ async def register_student(
     image: UploadFile = File(...)
 ):
     """
-    Enroll a new student:
-    - fullName (required)
-    - studentID (required)
-    - department (optional)
-    - section (optional)
-    - email (optional)
-    - batch (required)
-    - class_year (required)
-    - semester (required)
-    - image file (must contain one clear face)
+    Enroll a new student with duplicate face check.
     """
     try:
-        # Validate the email format if provided
+        # Validate email if provided
         if email:
             import re
             email_regex = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
@@ -257,12 +248,23 @@ async def register_student(
         contents = await image.read()
         pil_image = Image.open(BytesIO(contents)).convert("RGB")
 
-        # Extract embedding with insightface
+        # Extract embedding
         embedding = extract_face_embedding(pil_image)
         if embedding is None:
-            raise HTTPException(400, "No valid face detected in the uploaded image. Try a clearer photo.")
+            raise HTTPException(400, "No valid face detected. Try a clearer photo.")
 
-        # Prepare document for MongoDB with new attributes
+        # === DUPLICATE CHECK ===
+        from .recognizer import recognize_student
+        recog = recognize_student(embedding)
+
+        if recog["recognized"]:
+            raise HTTPException(
+                409, 
+                f"Student with similar face already registered as '{recog['full_name']}' (ID: {recog['student_id']})."
+            )
+        # =======================
+
+        # Prepare document
         user_doc = {
             "fullName": fullName.strip(),
             "studentID": studentID.strip(),
@@ -272,20 +274,19 @@ async def register_student(
             "batch": batch.strip(),
             "class_year": class_year.strip(),
             "semester": semester.strip(),
-            "faceEmbedding": embedding.tolist(),  # numpy array → list[float]
+            "faceEmbedding": embedding.tolist(),
             "registrationDate": datetime.utcnow()
         }
 
         # Check if studentID already exists
-        existing_student = students_collection.find_one({"studentID": studentID.strip()})
-        if existing_student:
+        if students_collection.find_one({"studentID": studentID.strip()}):
             raise HTTPException(400, f"Student with ID {studentID} already exists")
 
         # Save to MongoDB
         result = students_collection.insert_one(user_doc)
         user_id = str(result.inserted_id)
 
-        logger.info(f"Student registered: {fullName} (ID: {studentID})")
+        logger.info(f"New student registered: {fullName} (ID: {studentID})")
 
         return StudentOut(
             id=user_id,
